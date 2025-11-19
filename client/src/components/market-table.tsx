@@ -17,24 +17,27 @@ import {
 } from "lucide-react";
 
 const gradeIcons = {
-  "RBD Palm Oil": Zap,
-  "RBD Palm Stearin": Droplets,
-  "RBD Palm Olein IV56": TestTube,
-  "Olein IV64": Leaf,
+  "RBD PO": Zap,
+  "RBD PS": Droplets,
+  "RBD POL IV56": TestTube,
+  "RBD POL IV64": Leaf,
   "RBD PKO": Flame,
   "RBD CNO": Zap,
-  CDSBO: Droplets,
+  "RBD PKS": Flame,
+  "CDSBO": Droplets,
 } as const;
 
 const gradeColors = {
-  "RBD Palm Oil": "from-trading-blue to-blue-500",
-  "RBD Palm Stearin": "from-trading-amber to-orange-500",
-  "RBD Palm Olein IV56": "from-purple-500 to-purple-600",
-  "Olein IV64": "from-green-500 to-green-600",
+  "RBD PO": "from-trading-blue to-blue-500",
+  "RBD PS": "from-trading-amber to-orange-500",
+  "RBD POL IV56": "from-purple-500 to-purple-600",
+  "RBD POL IV64": "from-green-500 to-green-600",
   "RBD PKO": "from-red-500 to-red-600",
   "RBD CNO": "from-cyan-500 to-cyan-600",
-  CDSBO: "from-yellow-500 to-yellow-600",
+  "RBD PKS": "from-pink-500 to-pink-600",
+  "CDSBO": "from-yellow-500 to-yellow-600",
 } as const;
+
 
 type ForwardRow = {
   gradeId: number;

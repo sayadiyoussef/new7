@@ -15,7 +15,7 @@ var init_storage = __esm({
   "server/storage.ts"() {
     "use strict";
     FORWARDS = {
-      "RBD Palm Oil": [
+      "RBD PO": [
         { period: "August", ask: 1e3, code: "PO-MYRBD-M1" },
         { period: "September", ask: 1005, code: "PO-MYRBD-M2" },
         { period: "October", ask: 1010, code: "PO-MYRBD-M3" },
@@ -23,7 +23,7 @@ var init_storage = __esm({
         { period: "Jan/Feb/Mar", ask: 1010, code: "PO-MYRBD-Q2" },
         { period: "Apr/Mai/June", ask: 1005, code: "PO-MYRBD-Q3" }
       ],
-      "RBD Palm Olein IV56": [
+      "RBD POL IV56": [
         { period: "August", ask: 1015, code: "PO-MYRBD-M1" },
         { period: "September", ask: 1020, code: "PO-MYRBD-M2" },
         { period: "October", ask: 1035, code: "PO-MYRBD-M3" },
@@ -31,7 +31,7 @@ var init_storage = __esm({
         { period: "Jan/Feb/Mar", ask: 1020, code: "PO-MYRBD-Q2" },
         { period: "Apr/Mai/June", ask: 1015, code: "PO-MYRBD-Q3" }
       ],
-      "RBD Palm Stearin": [
+      "RBD PS": [
         { period: "August", ask: 1010, code: "PO-MYRBD-M1" },
         { period: "September", ask: 1015, code: "PO-MYRBD-M2" }
       ],
@@ -48,6 +48,11 @@ var init_storage = __esm({
         { period: "Aug25/Sep25", ask: 2e3, code: "RBD PKO" },
         { period: "Sep25/Oct25", ask: 2e3, code: "RBD PKO" },
         { period: "Oct25/Nov25", ask: 1950, code: "RBD PKO" }
+      ],
+      "RBD PKS": [
+        { period: "Jul25/Aug25", ask: 450, code: "RBD PKS" },
+        { period: "Aug25/Sep25", ask: 455, code: "RBD PKS" },
+        { period: "Sep25/Oct25", ask: 460, code: "RBD PKS" }
       ]
     };
     MemStorage = class {
@@ -59,25 +64,21 @@ var init_storage = __esm({
       knowledge = /* @__PURE__ */ new Map();
       chatMessages = /* @__PURE__ */ new Map();
       chatChannels = /* @__PURE__ */ new Map();
-      /** ✅ Cache “calculé” (fallback) pour forwards par gradeId */
       forwardPrices = /* @__PURE__ */ new Map();
-      /** ✅ Courbes forwards intégrées (préseedées) par *nom de grade* */
       forwardCurves = /* @__PURE__ */ new Map();
-      /** ✅ convertit un nom de grade en code court lisible (fallback) */
+      /** ✅ codes courts adaptés aux nouveaux noms */
       codeFromGradeName(name) {
         const map = {
-          "RBD Palm Oil": "RBDPO",
-          "RBD Palm Stearin": "RBDPS",
-          "RBD Palm Olein IV56": "RBDOL56",
-          "Olein IV64": "OL64",
+          "RBD PO": "RBDPO",
+          "RBD PS": "RBDPS",
+          "RBD POL IV56": "RBDPOL56",
+          "RBD POL IV64": "RBDPOL64",
           "RBD PKO": "PKO",
           "RBD CNO": "CNO",
+          "RBD PKS": "PKS",
           "CDSBO": "CDSBO"
         };
         return map[name] ?? name.toUpperCase().replace(/\s+/g, "_");
-      }
-      normalizeName(s) {
-        return (s || "").toLowerCase().replace(/\s+/g, " ").trim();
       }
       constructor() {
         const seedUsers = [
@@ -88,13 +89,14 @@ var init_storage = __esm({
         ];
         seedUsers.forEach((u) => this.users.set(u.id, u));
         const grades = [
-          { name: "RBD Palm Oil", region: "Malaysia", ffa: "< 0.1%", moisture: "< 0.1%", iv: "52-56", dobi: "2.4+", freightUsd: 120 },
-          { name: "RBD Palm Stearin", region: "Malaysia", ffa: "< 0.1%", freightUsd: 100 },
-          { name: "RBD Palm Olein IV56", region: "Malaysia", iv: "56", freightUsd: 130 },
-          { name: "Olein IV64", region: "Malaysia", iv: "64", freightUsd: 0 },
+          { name: "RBD PO", region: "Malaysia", ffa: "< 0.1%", moisture: "< 0.1%", iv: "52-56", dobi: "2.4+", freightUsd: 120 },
+          { name: "RBD PS", region: "Malaysia", ffa: "< 0.1%", freightUsd: 100 },
+          { name: "RBD POL IV56", region: "Malaysia", iv: "56", freightUsd: 130 },
+          { name: "RBD POL IV64", region: "Malaysia", iv: "64", freightUsd: 140 },
           { name: "RBD PKO", region: "Indonesia", freightUsd: 180 },
           { name: "RBD CNO", region: "Philippines", freightUsd: 200 },
-          { name: "CDSBO", region: "USA", freightUsd: 0 }
+          { name: "CDSBO", region: "USA", freightUsd: 0 },
+          { name: "RBD PKS", region: "Indonesia", ffa: "~", freightUsd: 170 }
         ];
         grades.forEach((g, idx) => this.oilGrades.set(idx + 1, { id: idx + 1, ...g }));
         const today = /* @__PURE__ */ new Date();
@@ -122,7 +124,7 @@ var init_storage = __esm({
           }
         }
         [
-          { date: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10), route: "MAL \u2192 TUN", grade: "RBD Palm Oil", volume: "5,000 MT", priceUsd: 980, counterparty: "Wilmar", vessel: "June shipment 25" },
+          { date: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10), route: "MAL \u2192 TUN", grade: "RBD PO", volume: "5,000 MT", priceUsd: 980, counterparty: "Wilmar", vessel: "June shipment 25" },
           { date: new Date(Date.now() - 864e5).toISOString().slice(0, 10), route: "IDN \u2192 TUN", grade: "RBD PKO", volume: "3,000 MT", priceUsd: 1210, counterparty: "Musim Mas", vessel: "August shipment 25" },
           { date: new Date(Date.now() - 3 * 864e5).toISOString().slice(0, 10), route: "USA \u2192 TUN", grade: "CDSBO", volume: "8,000 MT", priceUsd: 890, counterparty: "Bunge", vessel: "January shipment 26" }
         ].forEach((f) => {
@@ -138,7 +140,7 @@ var init_storage = __esm({
           this.vessels.set(id, { id, ...v });
         });
         [
-          { title: "Spec RBD Palm Oil", tags: ["spec", "quality"], excerpt: "FFA < 0.1%, Moisture < 0.1%, DOBI 2.4+", content: "Detailed spec for RBD Palm Oil used by DMA." },
+          { title: "Spec RBD PO", tags: ["spec", "quality"], excerpt: "FFA < 0.1%, Moisture < 0.1%, DOBI 2.4+", content: "Detailed spec for RBD PO used by DMA." },
           { title: "Contract Template (CIF)", tags: ["contract", "legal"], excerpt: "Standard CIF template for palm products", content: "Clause set for CIF DMA imports." },
           { title: "Ops Checklist: Discharge Rades", tags: ["ops", "port"], excerpt: "Pre-arrival docs, draft survey, sampling", content: "Operational checklist for Rades discharge." }
         ].forEach((k) => {
@@ -191,15 +193,40 @@ var init_storage = __esm({
         const id = Math.max(0, ...this.oilGrades.keys()) + 1;
         const g = { id, ...grade, name: grade.name || `Grade ${id}` };
         this.oilGrades.set(id, g);
+        await this.seedMarketForGrade(id, 30);
+        const forwards = FORWARDS[(g.name || "").trim()];
+        if (forwards && forwards.length) {
+          this.forwardCurves.set(g.name.trim(), forwards);
+        }
         return g;
       }
-      /** ✅ PATCH: met à jour/ajoute la propriété optionnelle `freightUsd` */
       async updateOilGradeFreight(id, freightUsd) {
         const g = this.oilGrades.get(id);
         if (!g) throw new Error("Grade not found");
         const updated = { ...g, freightUsd: Number(freightUsd) };
         this.oilGrades.set(id, updated);
         return updated;
+      }
+      /** ✅ optionnel : mise à jour générique, utile si tu renommes un grade */
+      async updateOilGrade(id, patch) {
+        const current = this.oilGrades.get(id);
+        if (!current) throw new Error("Grade not found");
+        const next = { ...current };
+        for (const k of ["name", "region", "ffa", "moisture", "iv", "dobi"]) {
+          if (patch[k] !== void 0) next[k] = patch[k];
+        }
+        if (patch.freightUsd !== void 0) next.freightUsd = Number(patch.freightUsd);
+        const nameChanged = patch.name && patch.name !== current.name;
+        if (nameChanged) {
+          for (const m of this.marketData.values()) {
+            if (m.gradeId === id) m.gradeName = patch.name;
+          }
+          this.forwardPrices.delete(id);
+          const fwd = FORWARDS[(patch.name || "").trim()];
+          if (fwd && fwd.length) this.forwardCurves.set(String(patch.name).trim(), fwd);
+        }
+        this.oilGrades.set(id, next);
+        return next;
       }
       // Market
       async getAllMarketData() {
@@ -214,43 +241,50 @@ var init_storage = __esm({
         this.marketData.set(id, m);
         return m;
       }
-      /** ✅ Forwards pour un grade :
-       *  1) si des données intégrées existent (FORWARDS), on les renvoie
-       *  2) sinon, fallback calculé depuis le dernier prix (Spot/M+1..M+3)
-       *  ⚠️ Compatibilité front : on renvoie aussi askUsd/priceUsd.
-       */
+      /** ✅ NEW: Génère une série de N jours pour le grade et invalide le cache forwards */
+      async seedMarketForGrade(gradeId, days = 30) {
+        const grade = this.oilGrades.get(gradeId);
+        if (!grade) return;
+        const today = /* @__PURE__ */ new Date();
+        for (let d = 0; d < days; d++) {
+          const date = new Date(today);
+          date.setDate(today.getDate() - (days - 1 - d));
+          const base = 900 + grade.id % 5 * 50;
+          const noise = (Math.random() - 0.5) * 30;
+          const trend = Math.sin(d / 5) * 12;
+          const priceUsd = Math.round((base + noise + trend) * 100) / 100;
+          const usdTnd = Math.round((3.1 + Math.random() * 0.4) * 1e3) / 1e3;
+          const change24h = Math.round((Math.random() - 0.5) * 6 * 10) / 10;
+          const id = randomUUID();
+          this.marketData.set(id, {
+            id,
+            gradeId: grade.id,
+            gradeName: grade.name,
+            date: date.toISOString().split("T")[0],
+            priceUsd,
+            usdTnd,
+            volume: `${Math.floor(Math.random() * 2e3 + 400)} MT`,
+            change24h
+          });
+        }
+        this.forwardPrices.delete(gradeId);
+      }
+      /** Forwards : intégrés si dispo, sinon fallback Spot/M+1..M+3 */
       async getForwardPricesByGrade(gradeId) {
         const g = this.oilGrades.get(gradeId);
         if (!g) return [];
-        const target = this.normalizeName(g.name || "");
-        let curve = this.forwardCurves.get((g.name || "").trim());
-        if (!curve) {
-          for (const [k, v] of this.forwardCurves.entries()) {
-            if (this.normalizeName(k) === target) {
-              curve = v;
-              break;
-            }
-          }
-        }
+        const curve = this.forwardCurves.get((g.name || "").trim());
         if (curve && curve.length) {
-          return curve.map((p) => {
-            const val = Number(p.ask);
-            return {
-              gradeId,
-              gradeName: g.name,
-              code: p.code,
-              period: p.period,
-              ask: val,
-              // aliases pour le front
-              askUsd: val,
-              priceUsd: val
-            };
-          });
+          return curve.map((p) => ({
+            gradeId,
+            gradeName: g.name,
+            code: p.code,
+            period: p.period,
+            ask: p.ask
+          }));
         }
         const cached = this.forwardPrices.get(gradeId);
-        if (cached) {
-          return cached.map((r) => ({ ...r, askUsd: r.ask, priceUsd: r.ask }));
-        }
+        if (cached) return cached;
         const series = await this.getMarketDataByGrade(gradeId);
         if (!series.length) return [];
         const last = series[series.length - 1];
@@ -261,7 +295,7 @@ var init_storage = __esm({
           { gradeId, gradeName: last.gradeName, code, period: "M+1", ask: Math.round((base + 10) * 100) / 100 },
           { gradeId, gradeName: last.gradeName, code, period: "M+2", ask: Math.round((base + 20) * 100) / 100 },
           { gradeId, gradeName: last.gradeName, code, period: "M+3", ask: Math.round((base + 30) * 100) / 100 }
-        ].map((r) => ({ ...r, askUsd: r.ask, priceUsd: r.ask }));
+        ];
         this.forwardPrices.set(gradeId, rows);
         return rows;
       }
@@ -696,14 +730,46 @@ async function registerRoutes(app) {
         return res.status(401).json({ message: "Invalid credentials" });
       }
       const token = "demo-token";
-      res.json({ data: { user: { id: user.id, name: user.name, email: user.email, role: user.role }, token } });
-    } catch (e) {
+      res.json({
+        data: {
+          user: { id: user.id, name: user.name, email: user.email, role: user.role },
+          token
+        }
+      });
+    } catch {
       res.status(400).json({ message: "Invalid login payload" });
     }
   });
   app.get("/api/grades", async (_req, res) => {
     const grades = await storage.getAllOilGrades();
     res.json({ data: grades });
+  });
+  app.get("/api/grades/:id", async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const g = await storage.getOilGrade(id);
+    if (!g) return res.status(404).json({ message: "Grade not found" });
+    res.json({ data: g });
+  });
+  app.post("/api/grades", async (req, res) => {
+    try {
+      const b = req.body || {};
+      if (!b.name || typeof b.name !== "string") {
+        return res.status(400).json({ message: "name is required" });
+      }
+      const created = await storage.createOilGrade({
+        name: String(b.name).trim(),
+        region: b.region ? String(b.region) : void 0,
+        ffa: b.ffa ? String(b.ffa) : void 0,
+        moisture: b.moisture ? String(b.moisture) : void 0,
+        iv: b.iv ? String(b.iv) : void 0,
+        dobi: b.dobi ? String(b.dobi) : void 0,
+        // @ts-ignore: on tolère freightUsd côté payload
+        freightUsd: b.freightUsd !== void 0 ? Number(b.freightUsd) : void 0
+      });
+      res.json({ data: created });
+    } catch (e) {
+      res.status(400).json({ message: e?.message || "Failed to create grade" });
+    }
   });
   app.put("/api/grades/:id/freight", async (req, res) => {
     try {
@@ -718,6 +784,41 @@ async function registerRoutes(app) {
       res.status(404).json({ message: e?.message || "Grade not found" });
     }
   });
+  app.put("/api/grades/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const b = req.body || {};
+      const patch = {};
+      if (b.name !== void 0) patch.name = String(b.name).trim();
+      if (b.region !== void 0) patch.region = b.region === "" ? void 0 : String(b.region);
+      if (b.ffa !== void 0) patch.ffa = b.ffa === "" ? void 0 : String(b.ffa);
+      if (b.moisture !== void 0) patch.moisture = b.moisture === "" ? void 0 : String(b.moisture);
+      if (b.iv !== void 0) patch.iv = b.iv === "" ? void 0 : String(b.iv);
+      if (b.dobi !== void 0) patch.dobi = b.dobi === "" ? void 0 : String(b.dobi);
+      if (b.freightUsd !== void 0) {
+        if (b.freightUsd === "" || b.freightUsd === null) patch.freightUsd = void 0;
+        else {
+          const n = Number(b.freightUsd);
+          if (!Number.isFinite(n)) return res.status(400).json({ message: "freightUsd must be a number" });
+          patch.freightUsd = n;
+        }
+      }
+      const maybeUpdate = storage?.updateOilGrade;
+      let updated;
+      if (typeof maybeUpdate === "function") {
+        updated = await maybeUpdate.call(storage, id, patch);
+      } else {
+        if ("freightUsd" in patch && Object.keys(patch).length === 1) {
+          updated = await storage.updateOilGradeFreight(id, patch.freightUsd);
+        } else {
+          return res.status(501).json({ message: "Generic grade update not supported by storage" });
+        }
+      }
+      res.json({ data: updated });
+    } catch (e) {
+      res.status(400).json({ message: e?.message || "Failed to update grade" });
+    }
+  });
   app.get("/api/grades/:id/forwards", async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -729,7 +830,9 @@ async function registerRoutes(app) {
       const series = (await storage.getMarketDataByGrade(id)).sort(
         (a, b) => a.date.localeCompare(b.date)
       );
-      if (!series.length) return res.status(404).json({ message: "No market data for grade" });
+      if (!series.length) {
+        return res.status(404).json({ message: "No market data for grade" });
+      }
       const spot = series[series.length - 1];
       const base = Number(spot.priceUsd);
       const out = [];
@@ -746,7 +849,7 @@ async function registerRoutes(app) {
         out.push({ gradeId: id, gradeName: spot.gradeName, period, code, askPrice: ask });
       }
       res.json({ data: out });
-    } catch (e) {
+    } catch {
       res.status(500).json({ message: "Failed to compute forwards" });
     }
   });
@@ -814,9 +917,7 @@ async function registerRoutes(app) {
   });
   app.get("/api/chat", async (req, res) => {
     const channelId = String(req.query.channelId || "");
-    let msgs;
-    if (channelId) msgs = await storage.getChatMessagesByChannel(channelId);
-    else msgs = await storage.getAllChatMessages();
+    const msgs = channelId ? await storage.getChatMessagesByChannel(channelId) : await storage.getAllChatMessages();
     res.json({ data: msgs });
   });
   app.post("/api/chat", async (req, res) => {

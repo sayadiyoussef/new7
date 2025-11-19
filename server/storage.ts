@@ -8,9 +8,9 @@ import {
 
 type ForwardPoint = { period: string; ask: number; code: string };
 
-/** ✅ Données forwards intégrées (ex-Excel), indexées par *nom* de grade */
+/** ✅ Données forwards intégrées (ex-Excel), indexées par *nom* de grade (nouvelles étiquettes) */
 const FORWARDS: Record<string, ForwardPoint[]> = {
-  "RBD Palm Oil": [
+  "RBD PO": [
     { period: "August",        ask: 1000, code: "PO-MYRBD-M1" },
     { period: "September",     ask: 1005, code: "PO-MYRBD-M2" },
     { period: "October",       ask: 1010, code: "PO-MYRBD-M3" },
@@ -18,7 +18,7 @@ const FORWARDS: Record<string, ForwardPoint[]> = {
     { period: "Jan/Feb/Mar",   ask: 1010, code: "PO-MYRBD-Q2" },
     { period: "Apr/Mai/June",  ask: 1005, code: "PO-MYRBD-Q3" },
   ],
-  "RBD Palm Olein IV56": [
+  "RBD POL IV56": [
     { period: "August",        ask: 1015, code: "PO-MYRBD-M1" },
     { period: "September",     ask: 1020, code: "PO-MYRBD-M2" },
     { period: "October",       ask: 1035, code: "PO-MYRBD-M3" },
@@ -26,7 +26,7 @@ const FORWARDS: Record<string, ForwardPoint[]> = {
     { period: "Jan/Feb/Mar",   ask: 1020, code: "PO-MYRBD-Q2" },
     { period: "Apr/Mai/June",  ask: 1015, code: "PO-MYRBD-Q3" },
   ],
-  "RBD Palm Stearin": [
+  "RBD PS": [
     { period: "August",        ask: 1010, code: "PO-MYRBD-M1" },
     { period: "September",     ask: 1015, code: "PO-MYRBD-M2" },
   ],
@@ -44,6 +44,11 @@ const FORWARDS: Record<string, ForwardPoint[]> = {
     { period: "Sep25/Oct25",   ask: 2000, code: "RBD PKO" },
     { period: "Oct25/Nov25",   ask: 1950, code: "RBD PKO" },
   ],
+  "RBD PKS": [
+    { period: "Jul25/Aug25",   ask: 450, code: "RBD PKS" },
+    { period: "Aug25/Sep25",   ask: 455, code: "RBD PKS" },
+    { period: "Sep25/Oct25",   ask: 460, code: "RBD PKS" },
+  ],
 };
 
 export interface IStorage {
@@ -60,14 +65,14 @@ export interface IStorage {
   getAllOilGrades(): Promise<OilGrade[]>;
   getOilGrade(id: number): Promise<OilGrade | undefined>;
   createOilGrade(grade: InsertOilGrade): Promise<OilGrade>;
-  /** ✅ PATCH: mettre à jour le Freight (USD) d’un grade */
   updateOilGradeFreight(id: number, freightUsd: number): Promise<any>;
+  /** ✅ optionnel mais utile : mise à jour générique (ex: rename) */
+  updateOilGrade?(id: number, patch: Partial<Omit<OilGrade,"id"> & { freightUsd?: number }>): Promise<OilGrade>;
 
   // Market
   getAllMarketData(): Promise<MarketData[]>;
   getMarketDataByGrade(gradeId: number): Promise<MarketData[]>;
   createMarketData(data: InsertMarketData): Promise<MarketData>;
-  /** ✅ Forwards (Spot + périodes) */
   getForwardPricesByGrade(gradeId: number): Promise<Array<{
     gradeId: number;
     gradeName: string;
@@ -75,6 +80,8 @@ export interface IStorage {
     period: string;
     ask: number;
   }>>;
+  /** ✅ NEW: permet de (re)générer des quotes pour un grade nouvellement créé */
+  seedMarketForGrade(gradeId: number, days?: number): Promise<void>;
 
   // Chat
   getAllChatMessages(): Promise<ChatMessage[]>;
@@ -105,28 +112,24 @@ class MemStorage implements IStorage {
   private chatMessages = new Map<string, ChatMessage>();
   private chatChannels = new Map<string, ChatChannel>();
 
-  /** ✅ Cache “calculé” (fallback) pour forwards par gradeId */
   private forwardPrices = new Map<number, Array<{
     gradeId: number; gradeName: string; code: string; period: string; ask: number;
   }>>();
-  /** ✅ Courbes forwards intégrées (préseedées) par *nom de grade* */
   private forwardCurves = new Map<string, ForwardPoint[]>();
 
-  /** ✅ convertit un nom de grade en code court lisible (fallback) */
+  /** ✅ codes courts adaptés aux nouveaux noms */
   private codeFromGradeName(name: string): string {
     const map: Record<string,string> = {
-      "RBD Palm Oil": "RBDPO",
-      "RBD Palm Stearin": "RBDPS",
-      "RBD Palm Olein IV56": "RBDOL56",
-      "Olein IV64": "OL64",
+      "RBD PO": "RBDPO",
+      "RBD PS": "RBDPS",
+      "RBD POL IV56": "RBDPOL56",
+      "RBD POL IV64": "RBDPOL64",
       "RBD PKO": "PKO",
       "RBD CNO": "CNO",
+      "RBD PKS": "PKS",
       "CDSBO": "CDSBO",
     };
     return map[name] ?? name.toUpperCase().replace(/\s+/g, "_");
-  }
-  private normalizeName(s: string) {
-    return (s || "").toLowerCase().replace(/\s+/g, " ").trim();
   }
 
   constructor() {
@@ -139,15 +142,16 @@ class MemStorage implements IStorage {
     ];
     seedUsers.forEach(u => this.users.set(u.id, u));
 
-    // Seed grades (+freightUsd)
+    // ✅ Seed grades avec nouveaux noms + ajout RBD PKS
     const grades: Array<Omit<OilGrade, "id"> & { freightUsd?: number }> = [
-      { name: "RBD Palm Oil",        region: "Malaysia",   ffa: "< 0.1%", moisture: "< 0.1%", iv: "52-56", dobi: "2.4+", freightUsd: 120 },
-      { name: "RBD Palm Stearin",    region: "Malaysia",   ffa: "< 0.1%",                                        freightUsd: 100 },
-      { name: "RBD Palm Olein IV56", region: "Malaysia",   iv: "56",                                              freightUsd: 130 },
-      { name: "Olein IV64",          region: "Malaysia",   iv: "64",                                              freightUsd: 0   },
-      { name: "RBD PKO",             region: "Indonesia",                                                          freightUsd: 180 },
-      { name: "RBD CNO",             region: "Philippines",                                                        freightUsd: 200 },
-      { name: "CDSBO",               region: "USA",                                                                freightUsd: 0   },
+      { name: "RBD PO",         region: "Malaysia",   ffa: "< 0.1%", moisture: "< 0.1%", iv: "52-56", dobi: "2.4+", freightUsd: 120 },
+      { name: "RBD PS",         region: "Malaysia",   ffa: "< 0.1%",                                        freightUsd: 100 },
+      { name: "RBD POL IV56",   region: "Malaysia",   iv: "56",                                              freightUsd: 130 },
+      { name: "RBD POL IV64",   region: "Malaysia",   iv: "64",                                              freightUsd: 140 },
+      { name: "RBD PKO",        region: "Indonesia",                                                          freightUsd: 180 },
+      { name: "RBD CNO",        region: "Philippines",                                                        freightUsd: 200 },
+      { name: "CDSBO",          region: "USA",                                                                freightUsd: 0   },
+      { name: "RBD PKS",        region: "Indonesia",   ffa: "~",                                              freightUsd: 170 },
     ];
     grades.forEach((g, idx) => this.oilGrades.set(idx + 1, { id: idx + 1, ...g }));
 
@@ -177,28 +181,26 @@ class MemStorage implements IStorage {
       }
     }
 
-    // Seed fixings
+    // Seed fixings / vessels / knowledge
     [
-      { date: new Date().toISOString().slice(0,10), route: "MAL → TUN", grade: "RBD Palm Oil", volume: "5,000 MT", priceUsd: 980, counterparty: "Wilmar", vessel: "June shipment 25" },
+      { date: new Date().toISOString().slice(0,10), route: "MAL → TUN", grade: "RBD PO",  volume: "5,000 MT", priceUsd: 980, counterparty: "Wilmar",    vessel: "June shipment 25" },
       { date: new Date(Date.now()-86400000).toISOString().slice(0,10), route: "IDN → TUN", grade: "RBD PKO", volume: "3,000 MT", priceUsd: 1210, counterparty: "Musim Mas", vessel: "August shipment 25" },
-      { date: new Date(Date.now()-3*86400000).toISOString().slice(0,10), route: "USA → TUN", grade: "CDSBO", volume: "8,000 MT", priceUsd: 890, counterparty: "Bunge", vessel: "January shipment 26" },
+      { date: new Date(Date.now()-3*86400000).toISOString().slice(0,10), route: "USA → TUN", grade: "CDSBO",   volume: "8,000 MT", priceUsd: 890, counterparty: "Bunge",     vessel: "January shipment 26" },
     ].forEach((f) => { const id = randomUUID(); this.fixings.set(id, { id, ...f }); });
 
-    // Seed vessels
     [
-      { name: "June shipment 25", type: "Tanker", dwt: 45000, status: "Laden", eta: "2025-09-02", origin: "Port Klang", destination: "Rades" },
-      { name: "August shipment 25", type: "Tanker", dwt: 38000, status: "Ballast", eta: "2025-08-28", origin: "Belawan", destination: "Rades" },
+      { name: "June shipment 25",    type: "Tanker", dwt: 45000, status: "Laden",    eta: "2025-09-02", origin: "Port Klang",  destination: "Rades" },
+      { name: "August shipment 25",  type: "Tanker", dwt: 38000, status: "Ballast",  eta: "2025-08-28", origin: "Belawan",     destination: "Rades" },
       { name: "January shipment 26", type: "Tanker", dwt: 52000, status: "At anchor", eta: "2025-09-10", origin: "New Orleans", destination: "Rades" },
     ].forEach((v) => { const id = randomUUID(); this.vessels.set(id, { id, ...v }); });
 
-    // Seed knowledge
     [
-      { title: "Spec RBD Palm Oil", tags: ["spec","quality"], excerpt: "FFA < 0.1%, Moisture < 0.1%, DOBI 2.4+", content: "Detailed spec for RBD Palm Oil used by DMA." },
+      { title: "Spec RBD PO",         tags: ["spec","quality"], excerpt: "FFA < 0.1%, Moisture < 0.1%, DOBI 2.4+", content: "Detailed spec for RBD PO used by DMA." },
       { title: "Contract Template (CIF)", tags: ["contract","legal"], excerpt: "Standard CIF template for palm products", content: "Clause set for CIF DMA imports." },
       { title: "Ops Checklist: Discharge Rades", tags: ["ops","port"], excerpt: "Pre-arrival docs, draft survey, sampling", content: "Operational checklist for Rades discharge." },
     ].forEach(k => { const id = randomUUID(); this.knowledge.set(id, { id, updatedAt: new Date().toISOString(), ...k }); });
 
-    // Seed channels
+    // Channels + Chat
     const chGeneralId = randomUUID();
     const chTradingId = randomUUID();
     const chOpsId = randomUUID();
@@ -207,9 +209,8 @@ class MemStorage implements IStorage {
     this.chatChannels.set(chTradingId, { id: chTradingId, name: "trading", createdAt: now });
     this.chatChannels.set(chOpsId, { id: chOpsId, name: "ops", createdAt: now });
 
-    // Seed chat
     const seedChat: Omit<ChatMessage,"id"|"timestamp">[] = [
-      { sender: "System", message: "Welcome to OilTracker team chat", userId: null },
+      { sender: "System",       message: "Welcome to OilTracker team chat", userId: null },
       { sender: "Senior Buyer", message: "Palm oil prices rallied this week. Should we increase our position?", userId: "2" },
       { sender: "Youssef SAYADI", message: "Agreed. Let's align on risk and TND exposure tomorrow.", userId: "1" },
       { sender: "Junior Buyer", message: "I uploaded a basis spreadsheet from Malaysia.", userId: "3" },
@@ -219,7 +220,7 @@ class MemStorage implements IStorage {
       this.chatMessages.set(id, { id, timestamp: new Date(), channelId: chGeneralId, ...m });
     });
 
-    // ▶︎ Seed des forwards intégrés
+    // ▶︎ Seed des forwards intégrés (avec les nouveaux noms)
     for (const [name, points] of Object.entries(FORWARDS)) {
       this.forwardCurves.set(name.trim(), points);
     }
@@ -241,19 +242,58 @@ class MemStorage implements IStorage {
   // Grades
   async getAllOilGrades() { return Array.from(this.oilGrades.values()); }
   async getOilGrade(id: number) { return this.oilGrades.get(id); }
+
   async createOilGrade(grade: InsertOilGrade) {
     const id = Math.max(0, ...this.oilGrades.keys()) + 1;
     const g: OilGrade = { id, ...grade, name: grade.name || `Grade ${id}` };
     this.oilGrades.set(id, g);
+
+    // ✅ Seed immédiat de la série marché et reset du cache forwards
+    await this.seedMarketForGrade(id, 30);
+
+    // ✅ Si un profil FORWARDS existe pour ce nom, on l’attache tout de suite
+    const forwards = FORWARDS[(g.name || "").trim()];
+    if (forwards && forwards.length) {
+      this.forwardCurves.set(g.name.trim(), forwards);
+    }
+
     return g;
   }
-  /** ✅ PATCH: met à jour/ajoute la propriété optionnelle `freightUsd` */
+
   async updateOilGradeFreight(id: number, freightUsd: number) {
     const g = this.oilGrades.get(id);
     if (!g) throw new Error("Grade not found");
     const updated = { ...(g as any), freightUsd: Number(freightUsd) };
     this.oilGrades.set(id, updated as any);
     return updated;
+  }
+
+  /** ✅ optionnel : mise à jour générique, utile si tu renommes un grade */
+  async updateOilGrade(id: number, patch: Partial<Omit<OilGrade,"id"> & { freightUsd?: number }>) {
+    const current = this.oilGrades.get(id);
+    if (!current) throw new Error("Grade not found");
+
+    const next: any = { ...current };
+    for (const k of ["name","region","ffa","moisture","iv","dobi"] as const) {
+      if (patch[k] !== undefined) next[k] = patch[k];
+    }
+    if (patch.freightUsd !== undefined) next.freightUsd = Number(patch.freightUsd);
+
+    const nameChanged = patch.name && patch.name !== current.name;
+
+    // propage le nouveau nom sur l’historique
+    if (nameChanged) {
+      for (const m of this.marketData.values()) {
+        if (m.gradeId === id) (m as any).gradeName = patch.name;
+      }
+      // reset cache forwards et lier un profil statique s'il existe
+      this.forwardPrices.delete(id);
+      const fwd = FORWARDS[(patch.name || "").trim()];
+      if (fwd && fwd.length) this.forwardCurves.set(String(patch.name).trim(), fwd);
+    }
+
+    this.oilGrades.set(id, next);
+    return next as OilGrade;
   }
 
   // Market
@@ -270,44 +310,56 @@ class MemStorage implements IStorage {
     return m;
   }
 
-  /** ✅ Forwards pour un grade :
-   *  1) si des données intégrées existent (FORWARDS), on les renvoie
-   *  2) sinon, fallback calculé depuis le dernier prix (Spot/M+1..M+3)
-   *  ⚠️ Compatibilité front : on renvoie aussi askUsd/priceUsd.
-   */
+  /** ✅ NEW: Génère une série de N jours pour le grade et invalide le cache forwards */
+  async seedMarketForGrade(gradeId: number, days = 30) {
+    const grade = this.oilGrades.get(gradeId);
+    if (!grade) return;
+
+    const today = new Date();
+    for (let d = 0; d < days; d++) {
+      const date = new Date(today);
+      date.setDate(today.getDate() - (days - 1 - d));
+      const base = 900 + (grade.id % 5) * 50;
+      const noise = (Math.random() - 0.5) * 30;
+      const trend = Math.sin(d / 5) * 12;
+      const priceUsd = Math.round((base + noise + trend) * 100) / 100;
+      const usdTnd = Math.round((3.1 + Math.random() * 0.4) * 1000) / 1000;
+      const change24h = Math.round(((Math.random() - 0.5) * 6) * 10) / 10;
+      const id = randomUUID();
+      this.marketData.set(id, {
+        id,
+        gradeId: grade.id,
+        gradeName: grade.name,
+        date: date.toISOString().split("T")[0],
+        priceUsd,
+        usdTnd,
+        volume: `${Math.floor(Math.random() * 2000 + 400)} MT`,
+        change24h,
+      });
+    }
+
+    // ❗ Invalide le cache forwards pour forcer le recalcul immédiat
+    this.forwardPrices.delete(gradeId);
+  }
+
+  /** Forwards : intégrés si dispo, sinon fallback Spot/M+1..M+3 */
   async getForwardPricesByGrade(gradeId: number) {
     const g = this.oilGrades.get(gradeId);
     if (!g) return [];
 
-    // 1) Données intégrées par nom (avec normalisation pour éviter les $NaN dues aux divergences de nom)
-    const target = this.normalizeName(g.name || "");
-    let curve = this.forwardCurves.get((g.name || "").trim());
-    if (!curve) {
-      for (const [k, v] of this.forwardCurves.entries()) {
-        if (this.normalizeName(k) === target) { curve = v; break; }
-      }
-    }
+    const curve = this.forwardCurves.get((g.name || "").trim());
     if (curve && curve.length) {
-      return curve.map(p => {
-        const val = Number(p.ask);
-        return {
-          gradeId,
-          gradeName: g.name,
-          code: p.code,
-          period: p.period,
-          ask: val,
-          // aliases pour le front
-          askUsd: val,
-          priceUsd: val,
-        } as any;
-      });
+      return curve.map(p => ({
+        gradeId,
+        gradeName: g.name,
+        code: p.code,
+        period: p.period,
+        ask: p.ask,
+      }));
     }
 
-    // 2) Fallback calculé (on garde le cache existant)
     const cached = this.forwardPrices.get(gradeId);
-    if (cached) {
-      return cached.map(r => ({ ...r, askUsd: r.ask, priceUsd: r.ask })) as any[];
-    }
+    if (cached) return cached;
 
     const series = await this.getMarketDataByGrade(gradeId);
     if (!series.length) return [];
@@ -321,7 +373,7 @@ class MemStorage implements IStorage {
       { gradeId, gradeName: last.gradeName, code, period: "M+1",     ask: Math.round((base + 10) * 100) / 100 },
       { gradeId, gradeName: last.gradeName, code, period: "M+2",     ask: Math.round((base + 20) * 100) / 100 },
       { gradeId, gradeName: last.gradeName, code, period: "M+3",     ask: Math.round((base + 30) * 100) / 100 },
-    ].map(r => ({ ...r, askUsd: r.ask, priceUsd: r.ask })) as any[];
+    ];
 
     this.forwardPrices.set(gradeId, rows);
     return rows;
@@ -353,7 +405,6 @@ class MemStorage implements IStorage {
   async getAllKnowledge() {
     return Array.from(this.knowledge.values()).sort((a,b)=> String(b.updatedAt).localeCompare(String(a.updatedAt)));
   }
-
   async createFixing(data:any){
     const id = randomUUID();
     const f = {
@@ -373,7 +424,6 @@ class MemStorage implements IStorage {
     }
     return f;
   }
-
   async updateFixing(id:string, data:any){
     const existing = this.fixings.get(id);
     if (!existing) throw new Error("Fixing not found");
@@ -385,34 +435,28 @@ class MemStorage implements IStorage {
     }
     return updated;
   }
-
   async deleteFixing(id:string){
     this.fixings.delete(id);
   }
-
   async createVessel(data:any){
     const id = randomUUID();
     const v = { id, name:data.name, type:data.type||"Tanker", dwt:Number(data.dwt||0), status:data.status||"Unknown", eta:data.eta, origin:data.origin, destination:data.destination };
     this.vessels.set(id, v);
     return v;
   }
-
   async updateVessel(id:string, data:any){
     const existing = this.vessels.get(id);
     if (!existing) throw new Error("Vessel not found");
     const updated = { ...existing, ...data, id };
-    // normalisations
     updated.dwt = Number(updated.dwt ?? existing.dwt ?? 0);
     updated.type = updated.type || "Tanker";
     updated.status = updated.status || "Unknown";
     this.vessels.set(id, updated);
     return updated;
   }
-
   async deleteVessel(id:string){
     this.vessels.delete(id);
   }
-
   async createKnowledge(data:any){
     const id = randomUUID();
     const k = { id, title:data.title||"Untitled", tags:data.tags||[], excerpt:data.excerpt||data.link||"", content:data.content||data.link||"", updatedAt: new Date().toISOString() };

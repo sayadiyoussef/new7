@@ -18,13 +18,13 @@ export default function Dashboard() {
   const getMetrics = () => {
     if (latestData.length === 0) return [];
 
-    const rbdPalmOil = latestData.find((d: any) => d.gradeName === "RBD Palm Oil");
-    const rbdPalmStearin = latestData.find((d: any) => d.gradeName === "RBD Palm Stearin");
+    const rbdPalmOil = latestData.find((d: any) => d.gradeName === "RBD PO");
+    const rbdPalmStearin = latestData.find((d: any) => d.gradeName === "RBD PS");
     const usdTnd = rbdPalmOil?.usdTnd || 3.184;
 
     return [
       {
-        label: "RBD Palm Oil",
+        label: "RBD PO",
         value: rbdPalmOil ? `$${rbdPalmOil.priceUsd}` : "$0.00",
         change: rbdPalmOil?.change24h || 0,
         icon: Zap,

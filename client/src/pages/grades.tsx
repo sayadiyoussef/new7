@@ -1,155 +1,441 @@
-import { useState, useMemo } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Sidebar from "@/components/sidebar";
 import TopBar from "@/components/topbar";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Layers, Droplets, Flame, TestTube, Leaf, Save } from "lucide-react";
-
-const iconMap: Record<string, any> = {
-  "RBD Palm Oil": Droplets,
-  "RBD Palm Stearin": Flame,
-  "RBD Palm Olein IV56": TestTube,
-  "Olein IV64": Leaf,
-  "RBD PKO": Flame,
-  "RBD CNO": Droplets,
-  "CDSBO": Layers,
-};
+import { Label } from "@/components/ui/label";
 
 type Grade = {
   id: number;
   name: string;
-  region?: string;      // conservé pour compat mais non affiché
+  region?: string;
   ffa?: string;
   moisture?: string;
   iv?: string;
   dobi?: string;
-  freightUsd?: number;  // valeur sauvegardée côté serveur
+  freightUsd?: number;
 };
 
-const fetchJSON = async (input: RequestInfo, init?: RequestInit) => {
-  const res = await fetch(input, init);
-  const text = await res.text();
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText} ${text || ""}`);
-  return JSON.parse(text);
-};
-
-export default function Grades() {
+export default function GradesPage() {
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ["/api/grades"] });
-  const grades: Grade[] = useMemo(() => (data as any)?.data || [], [data]);
+  const { data } = useQuery({ queryKey: ["/api/grades"] });
+  const grades: Grade[] = (data as any)?.data ?? [];
 
-  // brouillons locaux (par id de grade)
-  const [drafts, setDrafts] = useState<Record<number, string>>({});
-
-  const saveFreight = useMutation({
-    mutationFn: async ({ id, freightUsd }: { id: number; freightUsd: number }) => {
-      return fetchJSON(`/api/grades/${id}/freight`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ freightUsd }),
-      });
-    },
-    onSuccess: (_json, vars) => {
-      // mise à jour immédiate du cache
-      qc.setQueryData(["/api/grades"], (old: any) => {
-        const prev: Grade[] = old?.data ?? [];
-        const idx = prev.findIndex(g => g.id === vars.id);
-        if (idx < 0) return old;
-        const next = prev.slice();
-        next[idx] = { ...next[idx], freightUsd: vars.freightUsd };
-        return { data: next };
-      });
-    },
-    onError: (e: any) => {
-      alert(`Erreur lors de l'enregistrement du Freight:\n${e?.message || e}`);
-    },
+  // --- Formulaire de création ---
+  const [form, setForm] = useState({
+    name: "",
+    region: "",
+    ffa: "",
+    moisture: "",
+    iv: "",
+    dobi: "",
+    freightUsd: "",
   });
 
-  const handleSave = (id: number) => {
-    const raw = drafts[id] ?? "";
-    const val = Number(raw);
-    if (!Number.isFinite(val)) {
-      alert("Veuillez saisir un nombre valide pour Freight.");
+  const createGrade = async () => {
+    const name = form.name.trim();
+    if (!name) {
+      alert("Name is required");
       return;
     }
-    saveFreight.mutate({ id, freightUsd: val });
+    try {
+      const r = await fetch("/api/grades", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          region: form.region || undefined,
+          ffa: form.ffa || undefined,
+          moisture: form.moisture || undefined,
+          iv: form.iv || undefined,
+          dobi: form.dobi || undefined,
+          freightUsd:
+            form.freightUsd === "" ? undefined : Number(form.freightUsd),
+        }),
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        alert("Failed to create grade:\n" + t);
+        return;
+      }
+      const j = await r.json();
+      const created: Grade = j?.data;
+
+      // Optimiste: ajouter le nouveau grade localement
+      qc.setQueryData(["/api/grades"], (prev: any) => {
+        const prevArr: Grade[] = Array.isArray(prev?.data) ? prev.data : [];
+        return { data: [created, ...prevArr] };
+      });
+
+      // Invalidate pour rafraîchir toutes les vues liées
+      await qc.invalidateQueries({ queryKey: ["/api/grades"] });
+      await qc.invalidateQueries({
+        predicate: (q) =>
+          typeof q.queryKey?.[0] === "string" &&
+          (q.queryKey[0] as string).startsWith("/api/market"),
+      });
+      await qc.invalidateQueries({
+        predicate: (q) =>
+          typeof q.queryKey?.[0] === "string" &&
+          (q.queryKey[0] as string).includes("/forwards"),
+      });
+
+      setForm({
+        name: "",
+        region: "",
+        ffa: "",
+        moisture: "",
+        iv: "",
+        dobi: "",
+        freightUsd: "",
+      });
+    } catch (e: any) {
+      alert("Network error while creating grade:\n" + (e?.message || e));
+    }
+  };
+
+  // --- Édition (tous les champs) ---
+  const [editOpen, setEditOpen] = useState(false);
+  const [editGrade, setEditGrade] = useState<Grade | null>(null);
+  const [editForm, setEditForm] = useState({
+    name: "",
+    region: "",
+    ffa: "",
+    moisture: "",
+    iv: "",
+    dobi: "",
+    freightUsd: "",
+  });
+
+  const openEdit = (g: Grade) => {
+    setEditGrade(g);
+    setEditForm({
+      name: g.name || "",
+      region: g.region || "",
+      ffa: g.ffa || "",
+      moisture: g.moisture || "",
+      iv: g.iv || "",
+      dobi: g.dobi || "",
+      freightUsd:
+        g.freightUsd === undefined || g.freightUsd === null
+          ? ""
+          : String(g.freightUsd),
+    });
+    setEditOpen(true);
+  };
+
+  const saveEdit = async () => {
+    if (!editGrade) return;
+    const id = editGrade.id;
+
+    // Corps de la requête : on envoie les champs tels quels
+    // (le serveur convertira "" -> undefined pour les champs texte,
+    // et pour freightUsd ""/null -> undefined, nombre sinon)
+    const payload: any = {
+      name: editForm.name.trim(),
+      region: editForm.region,
+      ffa: editForm.ffa,
+      moisture: editForm.moisture,
+      iv: editForm.iv,
+      dobi: editForm.dobi,
+      freightUsd:
+        editForm.freightUsd.trim() === ""
+          ? ""
+          : Number(editForm.freightUsd.trim()),
+    };
+
+    // Validation légère côté client pour freight si non vide
+    if (
+      payload.freightUsd !== "" &&
+      !Number.isFinite(Number(payload.freightUsd))
+    ) {
+      alert("Freight must be a number");
+      return;
+    }
+
+    try {
+      const r = await fetch(`/api/grades/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        alert("Failed to update grade:\n" + t);
+        return;
+      }
+      const j = await r.json();
+      const updated: Grade = j?.data;
+
+      // Optimiste: remplace le grade dans le cache
+      qc.setQueryData(["/api/grades"], (prev: any) => {
+        const prevArr: Grade[] = Array.isArray(prev?.data) ? prev.data : [];
+        const next = prevArr.map((g) => (g.id === updated.id ? updated : g));
+        return { data: next };
+      });
+
+      // Invalidate pour forcer le recalcul/rafraîchissement ailleurs
+      await qc.invalidateQueries({ queryKey: ["/api/grades"] });
+      await qc.invalidateQueries({
+        predicate: (q) =>
+          typeof q.queryKey?.[0] === "string" &&
+          (q.queryKey[0] as string).startsWith("/api/market"),
+      });
+      await qc.invalidateQueries({
+        predicate: (q) =>
+          typeof q.queryKey?.[0] === "string" &&
+          (q.queryKey[0] as string).includes("/forwards"),
+      });
+
+      setEditOpen(false);
+      setEditGrade(null);
+    } catch (e: any) {
+      alert("Network error while updating grade:\n" + (e?.message || e));
+    }
   };
 
   return (
-    <div className="min-h-screen bg-trading-dark text-white">
-      <div className="flex">
-        <Sidebar />
-        <main className="flex-1">
-          <TopBar />
-          <div className="p-6 space-y-6">
-            <Card className="bg-gray-900 border-gray-700">
-              <CardHeader>
-                <CardTitle className="text-white">Oil Grades</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {isLoading ? (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <Skeleton className="h-24 w-full" />
-                    <Skeleton className="h-24 w-full" />
-                    <Skeleton className="h-24 w-full" />
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {grades.map((g) => {
-                      const Icon = iconMap[g.name] || Layers;
-                      const shown = drafts[g.id] ?? (g.freightUsd ?? "");
-                      return (
-                        <div key={g.id} className="border border-gray-700 rounded-lg p-4 bg-gray-800/60">
-                          <div className="flex items-center gap-3">
-                            <Icon className="w-5 h-5 text-trading-blue" />
-                            <div className="font-semibold">{g.name}</div>
+    <div className="flex h-screen bg-trading-dark text-white">
+      <Sidebar />
+      <div className="flex-1 flex flex-col">
+        <TopBar />
+        <main className="p-6 space-y-6">
+          {/* --- Création d'un grade --- */}
+          <Card className="bg-trading-slate border-gray-700">
+            <CardContent className="p-4">
+              <div className="text-lg font-semibold mb-3">Add a new grade</div>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                <div>
+                  <Label className="text-sm">Name *</Label>
+                  <Input
+                    className="bg-black/40 border-gray-700 text-white"
+                    value={form.name}
+                    onChange={(e) => setForm({ ...form, name: e.target.value })}
+                    placeholder="ex: RBD PKS"
+                  />
+                </div>
+                <div>
+                  <Label className="text-sm">Region</Label>
+                  <Input
+                    className="bg-black/40 border-gray-700 text-white"
+                    value={form.region}
+                    onChange={(e) =>
+                      setForm({ ...form, region: e.target.value })
+                    }
+                    placeholder="ex: Malaysia"
+                  />
+                </div>
+                <div>
+                  <Label className="text-sm">FFA</Label>
+                  <Input
+                    className="bg-black/40 border-gray-700 text-white"
+                    value={form.ffa}
+                    onChange={(e) => setForm({ ...form, ffa: e.target.value })}
+                    placeholder="< 0.1%"
+                  />
+                </div>
+                <div>
+                  <Label className="text-sm">Moisture</Label>
+                  <Input
+                    className="bg-black/40 border-gray-700 text-white"
+                    value={form.moisture}
+                    onChange={(e) =>
+                      setForm({ ...form, moisture: e.target.value })
+                    }
+                    placeholder="< 0.1%"
+                  />
+                </div>
+                <div>
+                  <Label className="text-sm">IV</Label>
+                  <Input
+                    className="bg-black/40 border-gray-700 text-white"
+                    value={form.iv}
+                    onChange={(e) => setForm({ ...form, iv: e.target.value })}
+                    placeholder="56"
+                  />
+                </div>
+                <div>
+                  <Label className="text-sm">DOBI</Label>
+                  <Input
+                    className="bg-black/40 border-gray-700 text-white"
+                    value={form.dobi}
+                    onChange={(e) => setForm({ ...form, dobi: e.target.value })}
+                    placeholder="2.4+"
+                  />
+                </div>
+                <div>
+                  <Label className="text-sm">Freight (USD)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    className="bg-black/40 border-gray-700 text-white"
+                    value={form.freightUsd}
+                    onChange={(e) =>
+                      setForm({ ...form, freightUsd: e.target.value })
+                    }
+                    placeholder="ex: 120"
+                  />
+                </div>
+              </div>
+              <div className="mt-4">
+                <Button className="bg-trading-blue" onClick={createGrade}>
+                  Save Grade
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
 
-                            {/* Champ FREIGHT (remplace la capsule pays) */}
-                            <div className="ml-auto flex items-center gap-2">
-                              <Input
-                                type="number"
-                                step="0.01"
-                                placeholder="Freight"
-                                aria-label="Freight"
-                                className="h-7 w-28 bg-black/30 border-gray-700 text-white"
-                                value={String(shown)}
-                                onChange={(e) =>
-                                  setDrafts((d) => ({ ...d, [g.id]: e.target.value }))
-                                }
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") handleSave(g.id);
-                                }}
-                              />
-                              <Button
-                                size="sm"
-                                className="h-7 px-2 bg-trading-blue"
-                                onClick={() => handleSave(g.id)}
-                                title="Save Freight"
-                              >
-                                <Save className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          </div>
-
-                          <div className="mt-3 grid grid-cols-2 gap-2 text-sm text-gray-300">
-                            <div><span className="text-gray-400">FFA:</span> {g.ffa || "—"}</div>
-                            <div><span className="text-gray-400">Moisture:</span> {g.moisture || "—"}</div>
-                            <div><span className="text-gray-400">IV:</span> {g.iv || "—"}</div>
-                            <div><span className="text-gray-400">DOBI:</span> {g.dobi || "—"}</div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+          {/* --- Liste & bouton Modifier --- */}
+          <Card className="bg-trading-slate border-gray-700">
+            <CardContent className="p-4">
+              <div className="text-lg font-semibold mb-3">Existing Grades</div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="text-gray-300">
+                    <tr className="text-left">
+                      <th className="py-2 px-3">ID</th>
+                      <th className="py-2 px-3">Name</th>
+                      <th className="py-2 px-3">Region</th>
+                      <th className="py-2 px-3">FFA</th>
+                      <th className="py-2 px-3">Moisture</th>
+                      <th className="py-2 px-3">IV</th>
+                      <th className="py-2 px-3">DOBI</th>
+                      <th className="py-2 px-3">Freight (USD)</th>
+                      <th className="py-2 px-3">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-gray-200">
+                    {grades.map((g) => (
+                      <tr key={g.id} className="border-t border-gray-700">
+                        <td className="py-2 px-3">{g.id}</td>
+                        <td className="py-2 px-3">{g.name}</td>
+                        <td className="py-2 px-3">{g.region || "—"}</td>
+                        <td className="py-2 px-3">{g.ffa || "—"}</td>
+                        <td className="py-2 px-3">{g.moisture || "—"}</td>
+                        <td className="py-2 px-3">{g.iv || "—"}</td>
+                        <td className="py-2 px-3">{g.dobi || "—"}</td>
+                        <td className="py-2 px-3">
+                          {g.freightUsd !== undefined ? g.freightUsd : "—"}
+                        </td>
+                        <td className="py-2 px-3">
+                          <Button
+                            variant="outline"
+                            className="border-gray-600 text-white"
+                            onClick={() => openEdit(g as Grade)}
+                          >
+                            Modifier
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
         </main>
       </div>
+
+      {/* --- Modal d'édition (tous les champs) --- */}
+      {editOpen && editGrade && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 w-[720px]">
+            <div className="text-lg font-semibold mb-3">
+              Modifier le grade #{editGrade.id}
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              <div className="col-span-2 md:col-span-3">
+                <Label className="text-sm">Name *</Label>
+                <Input
+                  className="bg-black/40 border-gray-700 text-white"
+                  value={editForm.name}
+                  onChange={(e) =>
+                    setEditForm((s) => ({ ...s, name: e.target.value }))
+                  }
+                  placeholder="ex: RBD PKS"
+                />
+              </div>
+
+              <div>
+                <Label className="text-sm">Region</Label>
+                <Input
+                  className="bg-black/40 border-gray-700 text-white"
+                  value={editForm.region}
+                  onChange={(e) =>
+                    setEditForm((s) => ({ ...s, region: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <Label className="text-sm">FFA</Label>
+                <Input
+                  className="bg-black/40 border-gray-700 text-white"
+                  value={editForm.ffa}
+                  onChange={(e) =>
+                    setEditForm((s) => ({ ...s, ffa: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <Label className="text-sm">Moisture</Label>
+                <Input
+                  className="bg-black/40 border-gray-700 text-white"
+                  value={editForm.moisture}
+                  onChange={(e) =>
+                    setEditForm((s) => ({ ...s, moisture: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <Label className="text-sm">IV</Label>
+                <Input
+                  className="bg-black/40 border-gray-700 text-white"
+                  value={editForm.iv}
+                  onChange={(e) =>
+                    setEditForm((s) => ({ ...s, iv: e.target.value }))
+                  }
+                />
+              </div>
+              <div className="md:col-span-2">
+                <Label className="text-sm">DOBI</Label>
+                <Input
+                  className="bg-black/40 border-gray-700 text-white"
+                  value={editForm.dobi}
+                  onChange={(e) =>
+                    setEditForm((s) => ({ ...s, dobi: e.target.value }))
+                  }
+                />
+              </div>
+
+              <div className="md:col-span-3">
+                <Label className="text-sm">Freight (USD)</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  className="bg-black/40 border-gray-700 text-white"
+                  value={editForm.freightUsd}
+                  onChange={(e) =>
+                    setEditForm((s) => ({ ...s, freightUsd: e.target.value }))
+                  }
+                  placeholder="ex: 120"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 mt-4">
+              <Button variant="outline" onClick={() => setEditOpen(false)}>
+                Cancel
+              </Button>
+              <Button className="bg-trading-blue" onClick={saveEdit}>
+                Save
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
