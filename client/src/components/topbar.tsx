@@ -8,39 +8,34 @@ export default function TopBar() {
   const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 1000);
-
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  const formatTime = (date: Date) => {
-    return date.toISOString().substr(11, 8) + ' UTC';
-  };
+  const formatTime = (date: Date) => date.toISOString().substr(11, 8) + " UTC";
 
   return (
     <header className="bg-trading-slate border-b border-gray-700 px-6 py-4">
       <div className="flex items-center justify-between">
         {/* Mobile menu button */}
-        <Button 
-          variant="ghost" 
+        <Button
+          variant="ghost"
           size="icon"
           className="md:hidden text-gray-400 hover:bg-gray-700"
           data-testid="button-mobile-menu"
         >
           <Menu className="w-5 h-5" />
         </Button>
-        
+
         <div className="flex items-center space-x-6">
           {/* Market Status */}
           <div className="flex items-center space-x-2">
-            <div className="w-3 h-3 bg-trading-green rounded-full animate-pulse"></div>
+            <div className="w-3 h-3 bg-trading-green rounded-full animate-pulse" />
             <span className="text-sm font-medium text-gray-300" data-testid="market-status">
               Market Open
             </span>
           </div>
-          
+
           {/* Current Time */}
           <div className="text-sm text-gray-400 font-mono" data-testid="current-time">
             {formatTime(currentTime)}
@@ -50,7 +45,7 @@ export default function TopBar() {
         <div className="flex items-center space-x-4">
           {/* Search */}
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
             <Input
               type="text"
               placeholder="Search grades..."
@@ -60,7 +55,7 @@ export default function TopBar() {
               data-testid="input-search"
             />
           </div>
-          
+
           {/* Notifications */}
           <Button
             variant="ghost"
@@ -69,7 +64,7 @@ export default function TopBar() {
             data-testid="button-notifications"
           >
             <Bell className="w-5 h-5" />
-            <span className="absolute -top-1 -right-1 w-3 h-3 bg-trading-red rounded-full"></span>
+            <span className="absolute -top-1 -right-1 w-3 h-3 bg-trading-red rounded-full" />
           </Button>
         </div>
       </div>

@@ -2,14 +2,14 @@ import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { 
-  BarChart3, 
-  MessageSquare, 
-  TrendingUp, 
-  Layers, 
-  Settings, 
+import {
+  BarChart3,
+  MessageSquare,
+  TrendingUp,
+  Layers,
+  Settings,
   LogOut,
-  Droplets
+  Droplets,
 } from "lucide-react";
 
 const navigation = [
@@ -29,36 +29,49 @@ export default function Sidebar() {
   const { user, logout } = useAuth();
 
   const getAvatarUrl = () => {
-    // Generate consistent avatar based on user name
     const avatars = [
       "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?ixlib=rb-4.0.3&w=150&h=150&fit=crop&crop=face",
       "https://images.unsplash.com/photo-1494790108755-2616b612b1e9?ixlib=rb-4.0.3&w=150&h=150&fit=crop&crop=face",
       "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?ixlib=rb-4.0.3&w=150&h=150&fit=crop&crop=face",
     ];
-    
     if (!user) return avatars[0];
     const index = user.name.length % avatars.length;
     return avatars[index];
   };
 
-  const getInitials = (name: string) => {
-    return name.split(' ').map(n => n[0]).join('').toUpperCase();
-  };
+  const getInitials = (name: string) =>
+    name.split(" ").map(n => n[0]).join("").toUpperCase();
 
   const getRoleBadgeColor = (role: string) => {
     switch (role) {
-      case 'admin': return 'text-trading-blue';
-      case 'senior': return 'text-trading-green';
-      case 'junior': return 'text-trading-amber';
-      default: return 'text-gray-400';
+      case "admin": return "text-trading-blue";
+      case "senior": return "text-trading-green";
+      case "junior": return "text-trading-amber";
+      default: return "text-gray-400";
     }
+  };
+
+  // Logout robuste -> retourne bien à la page d'identification (/)
+  const handleLogout = async () => {
+    try {
+      if (typeof logout === "function") await Promise.resolve(logout());
+    } catch {/* ignore hook errors */}
+    try {
+      localStorage.removeItem("token");
+      localStorage.removeItem("user");
+      sessionStorage.clear();
+    } catch {}
+    setLocation("/");            // <- ta page d'identification
+    setTimeout(() => {
+      if (typeof window !== "undefined") window.location.replace("/");
+    }, 0);
   };
 
   return (
     <div className="hidden md:flex md:flex-shrink-0">
-      <div className="flex flex-col w-64 bg-trading-slate border-r border-gray-700">
-        
-        {/* Logo & Brand */}
+      {/* Sidebar pleine hauteur, contenu en colonne */}
+      <aside className="flex flex-col w-64 h-screen bg-trading-slate border-r border-gray-700">
+        {/* Header */}
         <div className="flex items-center px-6 py-4 border-b border-gray-700">
           <div className="flex items-center space-x-3">
             <div className="w-8 h-8 bg-gradient-to-br from-trading-blue to-blue-500 rounded-lg flex items-center justify-center">
@@ -68,7 +81,7 @@ export default function Sidebar() {
           </div>
         </div>
 
-        {/* User Profile Card */}
+        {/* Profil */}
         {user && (
           <div className="px-4 py-4 border-b border-gray-700">
             <div className="flex items-center space-x-3" data-testid="user-profile">
@@ -90,48 +103,46 @@ export default function Sidebar() {
           </div>
         )}
 
-        {/* Navigation Menu */}
-        <nav className="flex-1 px-4 py-4 space-y-2">
-          {navigation.map((item) => {
-            const isActive = location === item.href || (location === '/' && item.href === '/dashboard');
+        {/* Zone scrollable uniquement pour le menu */}
+        <nav className="flex-1 px-4 py-4 space-y-2 overflow-y-auto">
+          {navigation.map(item => {
+            const isActive = location === item.href || (location === "/" && item.href === "/dashboard");
             const Icon = item.icon;
-            
             return (
               <button
                 key={item.name}
                 onClick={() => setLocation(item.href)}
                 className={`flex items-center space-x-3 w-full px-3 py-2 rounded-lg transition-colors text-left ${
                   isActive
-                    ? 'bg-trading-blue/20 text-trading-blue'
-                    : 'text-gray-300 hover:bg-gray-700 hover:text-white'
+                    ? "bg-trading-blue/20 text-trading-blue"
+                    : "text-gray-300 hover:bg-gray-700 hover:text-white"
                 }`}
-                data-testid={`nav-${item.name.toLowerCase().replace(' ', '-')}`}
+                data-testid={`nav-${item.name.toLowerCase().replace(" ", "-")}`}
               >
                 <Icon className="w-5 h-5" />
                 <span className="font-medium">{item.name}</span>
                 {item.name === "Team Chat" && (
-                  <span className="ml-auto bg-trading-red text-white text-xs rounded-full px-2 py-1">
-                    3
-                  </span>
+                  <span className="ml-auto bg-trading-red text-white text-xs rounded-full px-2 py-1">3</span>
                 )}
               </button>
             );
           })}
         </nav>
 
-        {/* Logout Button */}
-        <div className="px-4 py-4 border-t border-gray-700">
+        {/* Footer sticky : reste visible en bas même quand on scrolle */}
+        <div className="px-4 py-4 border-t border-gray-700 sticky bottom-0 bg-trading-slate z-10">
           <Button
-            onClick={logout}
+            onClick={handleLogout}
             variant="ghost"
             className="flex items-center space-x-3 w-full justify-start px-3 py-2 text-gray-400 hover:bg-gray-700 hover:text-white"
             data-testid="button-logout"
+            aria-label="Logout"
           >
             <LogOut className="w-5 h-5" />
             <span>Logout</span>
           </Button>
         </div>
-      </div>
+      </aside>
     </div>
   );
 }
