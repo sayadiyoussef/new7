@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage.js";
-import { loginSchema, insertChatMessageSchema, insertChatChannelSchema } from "@shared/schema";
+import { loginSchema, insertChatMessageSchema, insertChatChannelSchema, insertProductSchema } from "@shared/schema";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // ---------------- Auth ----------------
@@ -30,7 +30,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ data: grades });
   });
 
-  // (Optionnel/pratique) Lire un grade
   app.get("/api/grades/:id", async (req, res) => {
     const id = parseInt(req.params.id, 10);
     const g = await storage.getOilGrade(id);
@@ -38,7 +37,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ data: g });
   });
 
-  // Créer un grade (nom requis, autres champs optionnels)
   app.post("/api/grades", async (req, res) => {
     try {
       const b = req.body || {};
@@ -52,7 +50,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         moisture: b.moisture ? String(b.moisture) : undefined,
         iv: b.iv ? String(b.iv) : undefined,
         dobi: b.dobi ? String(b.dobi) : undefined,
-        // @ts-ignore: on tolère freightUsd côté payload
+        // @ts-ignore
         freightUsd: b.freightUsd !== undefined ? Number(b.freightUsd) : undefined,
       } as any);
       res.json({ data: created });
@@ -61,7 +59,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Mettre à jour le Freight (USD) d’un grade
   app.put("/api/grades/:id/freight", async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -76,14 +73,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // ✅ NEW: Mettre à jour un grade (renommage, specs, freight…)
-  // Si le nom change, storage propage au marketData et réinitialise les forwards.
   app.put("/api/grades/:id", async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
       const b = req.body || {};
-
-      // Patch autorisé : name, region, ffa, moisture, iv, dobi, freightUsd
       const patch: any = {};
       if (b.name !== undefined) patch.name = String(b.name).trim();
       if (b.region !== undefined) patch.region = b.region === "" ? undefined : String(b.region);
@@ -99,21 +92,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           patch.freightUsd = n;
         }
       }
-
-      // Si la méthode générique existe dans le storage (ajoutée dans storage.ts), on l’utilise
       const maybeUpdate = (storage as any)?.updateOilGrade;
       let updated;
       if (typeof maybeUpdate === "function") {
         updated = await maybeUpdate.call(storage, id, patch);
       } else {
-        // Fallback minimal : gérer seulement freight si pas de méthode générique
         if ("freightUsd" in patch && Object.keys(patch).length === 1) {
           updated = await storage.updateOilGradeFreight(id, patch.freightUsd);
         } else {
           return res.status(501).json({ message: "Generic grade update not supported by storage" });
         }
       }
-
       res.json({ data: updated });
     } catch (e: any) {
       res.status(400).json({ message: e?.message || "Failed to update grade" });
@@ -124,29 +113,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/grades/:id/forwards", async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
-
-      // Utilise la méthode du storage si dispo (intègre Excel/fallback)
       const maybeGet = (storage as any)?.getForwardPricesByGrade;
       if (typeof maybeGet === "function") {
         const rows = await maybeGet.call(storage, id);
         return res.json({ data: rows });
       }
-
-      // Fallback: génère M+1..M+6 à partir du dernier spot
-      const series = (await storage.getMarketDataByGrade(id)).sort(
-        (a: any, b: any) => a.date.localeCompare(b.date)
-      );
-      if (!series.length) {
-        return res.status(404).json({ message: "No market data for grade" });
-      }
+      const series = (await storage.getMarketDataByGrade(id)).sort((a: any, b: any) => a.date.localeCompare(b.date));
+      if (!series.length) return res.status(404).json({ message: "No market data for grade" });
 
       const spot = series[series.length - 1];
       const base = Number(spot.priceUsd);
       const out: Array<{ gradeId: number; gradeName: string; period: string; code: string; askPrice: number }> = [];
-
       const monthAbbr = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
       const today = new Date();
-
       for (let i = 1; i <= 6; i++) {
         const d = new Date(today);
         d.setMonth(d.getMonth() + i);
@@ -157,7 +136,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const ask = Math.round((base * (1 + 0.0025 * i) + 5 * i) * 100) / 100;
         out.push({ gradeId: id, gradeName: spot.gradeName, period, code, askPrice: ask });
       }
-
       res.json({ data: out });
     } catch {
       res.status(500).json({ message: "Failed to compute forwards" });
@@ -170,9 +148,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const all = await storage.getAllMarketData();
     const latestPerGrade = grades
       .map(g => {
-        const items = all
-          .filter(m => m.gradeId === g.id)
-          .sort((a, b) => a.date.localeCompare(b.date));
+        const items = all.filter(m => m.gradeId === g.id).sort((a, b) => a.date.localeCompare(b.date));
         return items[items.length - 1];
       })
       .filter(Boolean);
@@ -343,6 +319,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!title || !link) return res.status(400).json({ message: "title and link are required" });
     const saved = await storage.createKnowledge({ title, tags, excerpt: link, content: link });
     res.json({ data: saved });
+  });
+
+  // ----------------- NEW: Produits API -----------------
+  app.get("/api/products", async (_req, res) => {
+    const rows = await storage.getAllProducts();
+    res.json({ data: rows });
+  });
+
+  app.post("/api/products", async (req, res) => {
+    try {
+      const { name, reference, composition } = insertProductSchema.parse(req.body);
+      const saved = await storage.createProduct({ name, reference, composition });
+      res.json({ data: saved });
+    } catch (e: any) {
+      res.status(400).json({ message: e?.message || "Invalid product payload" });
+    }
+  });
+
+  app.put("/api/products/:id", async (req, res) => {
+    try {
+      const id = String(req.params.id);
+      const { name, reference, composition } = insertProductSchema.partial().parse(req.body || {});
+      const saved = await storage.updateProduct(id, { name, reference, composition } as any);
+      res.json({ data: saved });
+    } catch (e: any) {
+      res.status(400).json({ message: e?.message || "Failed to update product" });
+    }
+  });
+
+  app.delete("/api/products/:id", async (req, res) => {
+    try {
+      const id = String(req.params.id);
+      await storage.deleteProduct(id);
+      res.json({ data: { id } });
+    } catch {
+      res.status(404).json({ message: "Product not found" });
+    }
   });
 
   // --------------- 404 API ---------------

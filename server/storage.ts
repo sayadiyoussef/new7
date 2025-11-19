@@ -8,6 +8,17 @@ import {
 
 type ForwardPoint = { period: string; ask: number; code: string };
 
+// --------- NEW types produits (côté storage interne) -----------
+type ProductComponent = { gradeName: string; percent: number };
+type Product = {
+  id: string;
+  name: string;
+  reference?: string | null;
+  composition: ProductComponent[];
+  updatedAt: string;
+};
+// ---------------------------------------------------------------
+
 /** ✅ Données forwards intégrées (ex-Excel), indexées par *nom* de grade (nouvelles étiquettes) */
 const FORWARDS: Record<string, ForwardPoint[]> = {
   "RBD PO": [
@@ -66,21 +77,13 @@ export interface IStorage {
   getOilGrade(id: number): Promise<OilGrade | undefined>;
   createOilGrade(grade: InsertOilGrade): Promise<OilGrade>;
   updateOilGradeFreight(id: number, freightUsd: number): Promise<any>;
-  /** ✅ optionnel mais utile : mise à jour générique (ex: rename) */
   updateOilGrade?(id: number, patch: Partial<Omit<OilGrade,"id"> & { freightUsd?: number }>): Promise<OilGrade>;
 
   // Market
   getAllMarketData(): Promise<MarketData[]>;
   getMarketDataByGrade(gradeId: number): Promise<MarketData[]>;
   createMarketData(data: InsertMarketData): Promise<MarketData>;
-  getForwardPricesByGrade(gradeId: number): Promise<Array<{
-    gradeId: number;
-    gradeName: string;
-    code: string;
-    period: string;
-    ask: number;
-  }>>;
-  /** ✅ NEW: permet de (re)générer des quotes pour un grade nouvellement créé */
+  getForwardPricesByGrade(gradeId: number): Promise<Array<{ gradeId: number; gradeName: string; code: string; period: string; ask: number }>>;
   seedMarketForGrade(gradeId: number, days?: number): Promise<void>;
 
   // Chat
@@ -99,6 +102,12 @@ export interface IStorage {
   updateVessel(id:string, data:any): Promise<any>;
   deleteVessel(id:string): Promise<void>;
   createKnowledge(data:any): Promise<any>;
+
+  // --------- NEW: Produits ----------
+  getAllProducts(): Promise<Product[]>;
+  createProduct(data: { name: string; reference?: string | null; composition: ProductComponent[] }): Promise<Product>;
+  updateProduct(id: string, data: Partial<Omit<Product,"id"|"updatedAt">>): Promise<Product>;
+  deleteProduct(id: string): Promise<void>;
 }
 
 class MemStorage implements IStorage {
@@ -112,10 +121,11 @@ class MemStorage implements IStorage {
   private chatMessages = new Map<string, ChatMessage>();
   private chatChannels = new Map<string, ChatChannel>();
 
-  private forwardPrices = new Map<number, Array<{
-    gradeId: number; gradeName: string; code: string; period: string; ask: number;
-  }>>();
+  private forwardPrices = new Map<number, Array<{ gradeId: number; gradeName: string; code: string; period: string; ask: number }>>();
   private forwardCurves = new Map<string, ForwardPoint[]>();
+
+  // --------- NEW: stockage Produits ----------
+  private products = new Map<string, Product>();
 
   /** ✅ codes courts adaptés aux nouveaux noms */
   private codeFromGradeName(name: string): string {
@@ -132,6 +142,15 @@ class MemStorage implements IStorage {
     return map[name] ?? name.toUpperCase().replace(/\s+/g, "_");
   }
 
+  // util -> convertit "70,5%" ou "101,50%" en nombre 70.5 / 101.5
+  private parsePercentCell(v: string | number | null | undefined): number {
+    if (v === null || v === undefined) return 0;
+    if (typeof v === "number") return v;
+    const cleaned = v.replace(/\s+/g, "").replace("%", "").replace(",", ".");
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? n : 0;
+  }
+
   constructor() {
     // Seed users
     const seedUsers: User[] = [
@@ -142,7 +161,7 @@ class MemStorage implements IStorage {
     ];
     seedUsers.forEach(u => this.users.set(u.id, u));
 
-    // ✅ Seed grades avec nouveaux noms + ajout RBD PKS
+    // ✅ Seed grades
     const grades: Array<Omit<OilGrade, "id"> & { freightUsd?: number }> = [
       { name: "RBD PO",         region: "Malaysia",   ffa: "< 0.1%", moisture: "< 0.1%", iv: "52-56", dobi: "2.4+", freightUsd: 120 },
       { name: "RBD PS",         region: "Malaysia",   ffa: "< 0.1%",                                        freightUsd: 100 },
@@ -224,6 +243,35 @@ class MemStorage implements IStorage {
     for (const [name, points] of Object.entries(FORWARDS)) {
       this.forwardCurves.set(name.trim(), points);
     }
+
+    // ▶︎ NEW: Seed Produits (à partir du tableau fourni)
+    const seed = (name: string, obj: Partial<Record<string, string | number>>) => {
+      const id = randomUUID();
+      const composition: ProductComponent[] = Object.entries(obj)
+        .map(([gradeName, v]) => ({
+          gradeName,
+          percent: this.parsePercentCell(v),
+        }))
+        .filter(c => c.percent !== 0);
+      const p: Product = {
+        id,
+        name,
+        reference: null,
+        composition,
+        updatedAt: new Date().toISOString(),
+      };
+      this.products.set(id, p);
+    };
+
+    seed("EMAS 360-7", { "RBD PO": "70,5%", "RBD POL IV56": "20,5%", "RBD PS": "10,5%" });
+    seed("EMAS 360-9", { "RBD PO": "70,5%", "RBD POL IV56": "10,5%", "RBD PS": "20,5%" });
+    seed("EMAS 404",   { "RBD PO": "101,50%" });
+    seed("KERNEL 357", { "RBD PKO": "101,50%" });
+    seed("HELIOS 360-7", { "RBD PO": "65,5%", "RBD POL IV56": "5,5%", "RBD CNO": "30,5%" });
+    seed("ALBA 304-3", { "RBD POL IV64": "101,50%" });
+    seed("CBS PREMIUM", { "RBD PKS": "101,50%" });
+    seed("IRIS-204", { "RBD POL IV56": "101,50%" });
+    seed("HVSJ", { "CDSBO": "105%" });
   }
 
   // Users
@@ -248,10 +296,8 @@ class MemStorage implements IStorage {
     const g: OilGrade = { id, ...grade, name: grade.name || `Grade ${id}` };
     this.oilGrades.set(id, g);
 
-    // ✅ Seed immédiat de la série marché et reset du cache forwards
     await this.seedMarketForGrade(id, 30);
 
-    // ✅ Si un profil FORWARDS existe pour ce nom, on l’attache tout de suite
     const forwards = FORWARDS[(g.name || "").trim()];
     if (forwards && forwards.length) {
       this.forwardCurves.set(g.name.trim(), forwards);
@@ -268,7 +314,6 @@ class MemStorage implements IStorage {
     return updated;
   }
 
-  /** ✅ optionnel : mise à jour générique, utile si tu renommes un grade */
   async updateOilGrade(id: number, patch: Partial<Omit<OilGrade,"id"> & { freightUsd?: number }>) {
     const current = this.oilGrades.get(id);
     if (!current) throw new Error("Grade not found");
@@ -281,12 +326,10 @@ class MemStorage implements IStorage {
 
     const nameChanged = patch.name && patch.name !== current.name;
 
-    // propage le nouveau nom sur l’historique
     if (nameChanged) {
       for (const m of this.marketData.values()) {
         if (m.gradeId === id) (m as any).gradeName = patch.name;
       }
-      // reset cache forwards et lier un profil statique s'il existe
       this.forwardPrices.delete(id);
       const fwd = FORWARDS[(patch.name || "").trim()];
       if (fwd && fwd.length) this.forwardCurves.set(String(patch.name).trim(), fwd);
@@ -310,7 +353,6 @@ class MemStorage implements IStorage {
     return m;
   }
 
-  /** ✅ NEW: Génère une série de N jours pour le grade et invalide le cache forwards */
   async seedMarketForGrade(gradeId: number, days = 30) {
     const grade = this.oilGrades.get(gradeId);
     if (!grade) return;
@@ -338,11 +380,9 @@ class MemStorage implements IStorage {
       });
     }
 
-    // ❗ Invalide le cache forwards pour forcer le recalcul immédiat
     this.forwardPrices.delete(gradeId);
   }
 
-  /** Forwards : intégrés si dispo, sinon fallback Spot/M+1..M+3 */
   async getForwardPricesByGrade(gradeId: number) {
     const g = this.oilGrades.get(gradeId);
     if (!g) return [];
@@ -473,6 +513,44 @@ class MemStorage implements IStorage {
     const ch: ChatChannel = { id, name: data.name, createdAt: new Date() };
     this.chatChannels.set(id, ch);
     return ch;
+  }
+
+  // ------------------- Produits -------------------
+  async getAllProducts() {
+    return Array.from(this.products.values()).sort((a,b)=> a.name.localeCompare(b.name));
+  }
+  async createProduct(data: { name: string; reference?: string | null; composition: ProductComponent[] }) {
+    const id = randomUUID();
+    const composition = (data.composition || [])
+      .map(c => ({ gradeName: String(c.gradeName), percent: Number(c.percent) || 0 }))
+      .filter(c => c.percent !== 0);
+    const p: Product = {
+      id,
+      name: data.name,
+      reference: data.reference ?? null,
+      composition,
+      updatedAt: new Date().toISOString(),
+    };
+    this.products.set(id, p);
+    return p;
+  }
+  async updateProduct(id: string, data: Partial<Omit<Product,"id"|"updatedAt">>) {
+    const existing = this.products.get(id);
+    if (!existing) throw new Error("Product not found");
+    const next: Product = {
+      ...existing,
+      ...("name" in data ? { name: String(data.name) } : {}),
+      ...("reference" in data ? { reference: (data as any).reference ?? null } : {}),
+      ...(data.composition
+        ? { composition: data.composition.map(c => ({ gradeName: String(c.gradeName), percent: Number(c.percent)||0 })).filter(c => c.percent !== 0) }
+        : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    this.products.set(id, next);
+    return next;
+    }
+  async deleteProduct(id: string) {
+    this.products.delete(id);
   }
 }
 

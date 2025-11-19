@@ -1,3 +1,4 @@
+// src/components/sidebar.tsx
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -10,12 +11,15 @@ import {
   Settings,
   LogOut,
   Droplets,
+  Package, // icon pour Products
 } from "lucide-react";
 
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: BarChart3 },
   { name: "Fixings", href: "/fixings", icon: Droplets },
   { name: "Navires", href: "/navires", icon: Droplets },
+  // ✅ placé juste après Navires
+  { name: "Products", href: "/products", icon: Package },
   { name: "Base de connaissance", href: "/knowledge", icon: Layers },
   { name: "Market Data", href: "/market", icon: TrendingUp },
   { name: "Oil Grades", href: "/grades", icon: Layers },
@@ -51,27 +55,20 @@ export default function Sidebar() {
     }
   };
 
-  // Logout robuste -> retourne bien à la page d'identification (/)
   const handleLogout = async () => {
-    try {
-      if (typeof logout === "function") await Promise.resolve(logout());
-    } catch {/* ignore hook errors */}
+    try { if (typeof logout === "function") await Promise.resolve(logout()); } catch {}
     try {
       localStorage.removeItem("token");
       localStorage.removeItem("user");
       sessionStorage.clear();
     } catch {}
-    setLocation("/");            // <- ta page d'identification
-    setTimeout(() => {
-      if (typeof window !== "undefined") window.location.replace("/");
-    }, 0);
+    setLocation("/");
+    setTimeout(() => { if (typeof window !== "undefined") window.location.replace("/"); }, 0);
   };
 
   return (
     <div className="hidden md:flex md:flex-shrink-0">
-      {/* Sidebar pleine hauteur, contenu en colonne */}
       <aside className="flex flex-col w-64 h-screen bg-trading-slate border-r border-gray-700">
-        {/* Header */}
         <div className="flex items-center px-6 py-4 border-b border-gray-700">
           <div className="flex items-center space-x-3">
             <div className="w-8 h-8 bg-gradient-to-br from-trading-blue to-blue-500 rounded-lg flex items-center justify-center">
@@ -81,7 +78,6 @@ export default function Sidebar() {
           </div>
         </div>
 
-        {/* Profil */}
         {user && (
           <div className="px-4 py-4 border-b border-gray-700">
             <div className="flex items-center space-x-3" data-testid="user-profile">
@@ -92,9 +88,7 @@ export default function Sidebar() {
                 </AvatarFallback>
               </Avatar>
               <div className="flex-1">
-                <p className="text-sm font-medium text-white" data-testid="user-name">
-                  {user.name}
-                </p>
+                <p className="text-sm font-medium text-white" data-testid="user-name">{user.name}</p>
                 <p className={`text-xs font-medium capitalize ${getRoleBadgeColor(user.role)}`} data-testid="user-role">
                   {user.role}
                 </p>
@@ -103,7 +97,6 @@ export default function Sidebar() {
           </div>
         )}
 
-        {/* Zone scrollable uniquement pour le menu */}
         <nav className="flex-1 px-4 py-4 space-y-2 overflow-y-auto">
           {navigation.map(item => {
             const isActive = location === item.href || (location === "/" && item.href === "/dashboard");
@@ -113,9 +106,7 @@ export default function Sidebar() {
                 key={item.name}
                 onClick={() => setLocation(item.href)}
                 className={`flex items-center space-x-3 w-full px-3 py-2 rounded-lg transition-colors text-left ${
-                  isActive
-                    ? "bg-trading-blue/20 text-trading-blue"
-                    : "text-gray-300 hover:bg-gray-700 hover:text-white"
+                  isActive ? "bg-trading-blue/20 text-trading-blue" : "text-gray-300 hover:bg-gray-700 hover:text-white"
                 }`}
                 data-testid={`nav-${item.name.toLowerCase().replace(" ", "-")}`}
               >
@@ -129,7 +120,6 @@ export default function Sidebar() {
           })}
         </nav>
 
-        {/* Footer sticky : reste visible en bas même quand on scrolle */}
         <div className="px-4 py-4 border-t border-gray-700 sticky bottom-0 bg-trading-slate z-10">
           <Button
             onClick={handleLogout}

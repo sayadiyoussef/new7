@@ -66,6 +66,8 @@ var init_storage = __esm({
       chatChannels = /* @__PURE__ */ new Map();
       forwardPrices = /* @__PURE__ */ new Map();
       forwardCurves = /* @__PURE__ */ new Map();
+      // --------- NEW: stockage Produits ----------
+      products = /* @__PURE__ */ new Map();
       /** ✅ codes courts adaptés aux nouveaux noms */
       codeFromGradeName(name) {
         const map = {
@@ -79,6 +81,14 @@ var init_storage = __esm({
           "CDSBO": "CDSBO"
         };
         return map[name] ?? name.toUpperCase().replace(/\s+/g, "_");
+      }
+      // util -> convertit "70,5%" ou "101,50%" en nombre 70.5 / 101.5
+      parsePercentCell(v) {
+        if (v === null || v === void 0) return 0;
+        if (typeof v === "number") return v;
+        const cleaned = v.replace(/\s+/g, "").replace("%", "").replace(",", ".");
+        const n = Number(cleaned);
+        return Number.isFinite(n) ? n : 0;
       }
       constructor() {
         const seedUsers = [
@@ -167,6 +177,30 @@ var init_storage = __esm({
         for (const [name, points] of Object.entries(FORWARDS)) {
           this.forwardCurves.set(name.trim(), points);
         }
+        const seed = (name, obj) => {
+          const id = randomUUID();
+          const composition = Object.entries(obj).map(([gradeName, v]) => ({
+            gradeName,
+            percent: this.parsePercentCell(v)
+          })).filter((c) => c.percent !== 0);
+          const p = {
+            id,
+            name,
+            reference: null,
+            composition,
+            updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+          };
+          this.products.set(id, p);
+        };
+        seed("EMAS 360-7", { "RBD PO": "70,5%", "RBD POL IV56": "20,5%", "RBD PS": "10,5%" });
+        seed("EMAS 360-9", { "RBD PO": "70,5%", "RBD POL IV56": "10,5%", "RBD PS": "20,5%" });
+        seed("EMAS 404", { "RBD PO": "101,50%" });
+        seed("KERNEL 357", { "RBD PKO": "101,50%" });
+        seed("HELIOS 360-7", { "RBD PO": "65,5%", "RBD POL IV56": "5,5%", "RBD CNO": "30,5%" });
+        seed("ALBA 304-3", { "RBD POL IV64": "101,50%" });
+        seed("CBS PREMIUM", { "RBD PKS": "101,50%" });
+        seed("IRIS-204", { "RBD POL IV56": "101,50%" });
+        seed("HVSJ", { "CDSBO": "105%" });
       }
       // Users
       async getUser(id) {
@@ -207,7 +241,6 @@ var init_storage = __esm({
         this.oilGrades.set(id, updated);
         return updated;
       }
-      /** ✅ optionnel : mise à jour générique, utile si tu renommes un grade */
       async updateOilGrade(id, patch) {
         const current = this.oilGrades.get(id);
         if (!current) throw new Error("Grade not found");
@@ -241,7 +274,6 @@ var init_storage = __esm({
         this.marketData.set(id, m);
         return m;
       }
-      /** ✅ NEW: Génère une série de N jours pour le grade et invalide le cache forwards */
       async seedMarketForGrade(gradeId, days = 30) {
         const grade = this.oilGrades.get(gradeId);
         if (!grade) return;
@@ -269,7 +301,6 @@ var init_storage = __esm({
         }
         this.forwardPrices.delete(gradeId);
       }
-      /** Forwards : intégrés si dispo, sinon fallback Spot/M+1..M+3 */
       async getForwardPricesByGrade(gradeId) {
         const g = this.oilGrades.get(gradeId);
         if (!g) return [];
@@ -391,6 +422,39 @@ var init_storage = __esm({
         const ch = { id, name: data.name, createdAt: /* @__PURE__ */ new Date() };
         this.chatChannels.set(id, ch);
         return ch;
+      }
+      // ------------------- Produits -------------------
+      async getAllProducts() {
+        return Array.from(this.products.values()).sort((a, b) => a.name.localeCompare(b.name));
+      }
+      async createProduct(data) {
+        const id = randomUUID();
+        const composition = (data.composition || []).map((c) => ({ gradeName: String(c.gradeName), percent: Number(c.percent) || 0 })).filter((c) => c.percent !== 0);
+        const p = {
+          id,
+          name: data.name,
+          reference: data.reference ?? null,
+          composition,
+          updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        this.products.set(id, p);
+        return p;
+      }
+      async updateProduct(id, data) {
+        const existing = this.products.get(id);
+        if (!existing) throw new Error("Product not found");
+        const next = {
+          ...existing,
+          ..."name" in data ? { name: String(data.name) } : {},
+          ..."reference" in data ? { reference: data.reference ?? null } : {},
+          ...data.composition ? { composition: data.composition.map((c) => ({ gradeName: String(c.gradeName), percent: Number(c.percent) || 0 })).filter((c) => c.percent !== 0) } : {},
+          updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        this.products.set(id, next);
+        return next;
+      }
+      async deleteProduct(id) {
+        this.products.delete(id);
       }
     };
     storage = new MemStorage();
@@ -676,7 +740,9 @@ var insertOilGradeSchema = z.object({
   ffa: z.string().optional(),
   moisture: z.string().optional(),
   iv: z.string().optional(),
-  dobi: z.string().optional()
+  dobi: z.string().optional(),
+  // on autorise freightUsd côté API (optionnel)
+  freightUsd: z.number().optional()
 });
 var oilGradeSchema = insertOilGradeSchema.extend({ id: z.number() });
 var insertMarketDataSchema = z.object({
@@ -690,7 +756,7 @@ var insertMarketDataSchema = z.object({
   volume: z.string(),
   // "1234 MT"
   change24h: z.number()
-  // percentage +/-
+  // percentage +/- (en points)
 });
 var marketDataSchema = insertMarketDataSchema.extend({ id: z.string() });
 var insertChatChannelSchema = z.object({
@@ -718,6 +784,23 @@ var chatMessageSchema = insertChatMessageSchema.extend({
 var loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1)
+});
+var productComponentSchema = z.object({
+  gradeName: z.string(),
+  // doit correspondre au name du grade
+  percent: z.number()
+  // ex: 70.5 (pas "70,5%")
+});
+var insertProductSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1),
+  reference: z.string().nullable().optional(),
+  composition: z.array(productComponentSchema).default([]),
+  updatedAt: z.string().optional()
+});
+var productSchema = insertProductSchema.extend({
+  id: z.string(),
+  updatedAt: z.string()
 });
 
 // server/routes.ts
@@ -763,7 +846,7 @@ async function registerRoutes(app) {
         moisture: b.moisture ? String(b.moisture) : void 0,
         iv: b.iv ? String(b.iv) : void 0,
         dobi: b.dobi ? String(b.dobi) : void 0,
-        // @ts-ignore: on tolère freightUsd côté payload
+        // @ts-ignore
         freightUsd: b.freightUsd !== void 0 ? Number(b.freightUsd) : void 0
       });
       res.json({ data: created });
@@ -827,12 +910,8 @@ async function registerRoutes(app) {
         const rows = await maybeGet.call(storage, id);
         return res.json({ data: rows });
       }
-      const series = (await storage.getMarketDataByGrade(id)).sort(
-        (a, b) => a.date.localeCompare(b.date)
-      );
-      if (!series.length) {
-        return res.status(404).json({ message: "No market data for grade" });
-      }
+      const series = (await storage.getMarketDataByGrade(id)).sort((a, b) => a.date.localeCompare(b.date));
+      if (!series.length) return res.status(404).json({ message: "No market data for grade" });
       const spot = series[series.length - 1];
       const base = Number(spot.priceUsd);
       const out = [];
@@ -1001,6 +1080,38 @@ async function registerRoutes(app) {
     if (!title || !link) return res.status(400).json({ message: "title and link are required" });
     const saved = await storage.createKnowledge({ title, tags, excerpt: link, content: link });
     res.json({ data: saved });
+  });
+  app.get("/api/products", async (_req, res) => {
+    const rows = await storage.getAllProducts();
+    res.json({ data: rows });
+  });
+  app.post("/api/products", async (req, res) => {
+    try {
+      const { name, reference, composition } = insertProductSchema.parse(req.body);
+      const saved = await storage.createProduct({ name, reference, composition });
+      res.json({ data: saved });
+    } catch (e) {
+      res.status(400).json({ message: e?.message || "Invalid product payload" });
+    }
+  });
+  app.put("/api/products/:id", async (req, res) => {
+    try {
+      const id = String(req.params.id);
+      const { name, reference, composition } = insertProductSchema.partial().parse(req.body || {});
+      const saved = await storage.updateProduct(id, { name, reference, composition });
+      res.json({ data: saved });
+    } catch (e) {
+      res.status(400).json({ message: e?.message || "Failed to update product" });
+    }
+  });
+  app.delete("/api/products/:id", async (req, res) => {
+    try {
+      const id = String(req.params.id);
+      await storage.deleteProduct(id);
+      res.json({ data: { id } });
+    } catch {
+      res.status(404).json({ message: "Product not found" });
+    }
   });
   app.all("/api/*", (_req, res) => {
     res.status(404).json({ message: "API route not found" });

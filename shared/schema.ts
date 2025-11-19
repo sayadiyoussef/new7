@@ -27,6 +27,8 @@ export const insertOilGradeSchema = z.object({
   moisture: z.string().optional(),
   iv: z.string().optional(),
   dobi: z.string().optional(),
+  // on autorise freightUsd côté API (optionnel)
+  freightUsd: z.number().optional(),
 });
 export const oilGradeSchema = insertOilGradeSchema.extend({ id: z.number() });
 export type InsertOilGrade = z.infer<typeof insertOilGradeSchema>;
@@ -41,13 +43,11 @@ export const insertMarketDataSchema = z.object({
   priceUsd: z.number(),
   usdTnd: z.number(),
   volume: z.string(),      // "1234 MT"
-  change24h: z.number(),   // percentage +/-
+  change24h: z.number(),   // percentage +/- (en points)
 });
 export const marketDataSchema = insertMarketDataSchema.extend({ id: z.string() });
 export type InsertMarketData = z.infer<typeof insertMarketDataSchema>;
 export type MarketData = z.infer<typeof marketDataSchema>;
-
-// CHAT
 
 // CHAT CHANNELS
 export const insertChatChannelSchema = z.object({
@@ -85,3 +85,23 @@ export const loginSchema = z.object({
   password: z.string().min(1),
 });
 export type LoginRequest = z.infer<typeof loginSchema>;
+
+// ----------------- NEW: PRODUITS -----------------
+export const productComponentSchema = z.object({
+  gradeName: z.string(),        // doit correspondre au name du grade
+  percent: z.number(),          // ex: 70.5 (pas "70,5%")
+});
+
+export const insertProductSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1),
+  reference: z.string().nullable().optional(),
+  composition: z.array(productComponentSchema).default([]),
+  updatedAt: z.string().optional(),
+});
+export const productSchema = insertProductSchema.extend({
+  id: z.string(),
+  updatedAt: z.string(),
+});
+export type InsertProduct = z.infer<typeof insertProductSchema>;
+export type Product = z.infer<typeof productSchema>;

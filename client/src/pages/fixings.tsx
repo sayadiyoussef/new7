@@ -11,9 +11,10 @@ import { Pencil, Copy, Trash2, Mail, FileSpreadsheet } from "lucide-react";
 // --- Types locaux minimalistes (compat) ---
 type Fixing = {
   id?: string;
+  code?: string;             // ✅ NOUVEAU: code unique généré côté serveur
   date: string;
   route: string;
-  grade: string;           // nom du grade
+  grade: string;             // nom du grade
   volume: string;
   priceUsd: number | string;
   counterparty: string;
@@ -320,6 +321,7 @@ export default function FixingsPage() {
                       <th className="py-2 px-3">Freight</th>
                       <th className="py-2 px-3">Counterparty</th>
                       <th className="py-2 px-3">Vessel</th>
+                      <th className="py-2 px-3">Code</th> {/* ✅ NOUVELLE COLONNE */}
                       <th className="py-2 px-3">Actions</th>
                     </tr>
                   </thead>
@@ -353,6 +355,23 @@ export default function FixingsPage() {
                         <td className="py-2 px-3">{r.vessel || "—"}</td>
                         <td className="py-2 px-3">
                           <div className="flex items-center gap-2">
+                            <span>{r.code || "—"}</span>
+                            {r.code && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                title="Copy code"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(r.code!);
+                                }}
+                              >
+                                <Copy className="h-3 w-3" />
+                              </Button>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-2 px-3">
+                          <div className="flex items-center gap-2">
                             <Button
                               variant="ghost"
                               size="icon"
@@ -368,7 +387,9 @@ export default function FixingsPage() {
                                   counterparty: r.counterparty ?? "",
                                   vessel: r.vessel ?? "",
                                   freightUsd: r.freightUsd ?? getEffectiveFreight(r) ?? "",
-                                });
+                                  code: r.code, // pas editable, mais on le garde dans le form si besoin d'aperçu
+                                  id: r.id,
+                                } as Fixing);
                                 setOpen(true);
                               }}
                             >
@@ -535,6 +556,27 @@ export default function FixingsPage() {
                   ))}
                 </select>
               </div>
+
+              {/* ✅ (Optionnel lecture seule) Aperçu du code si on édite un fixing existant */}
+              {editingId && form.code && (
+                <div className="col-span-2">
+                  <Label className="text-sm">Code</Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      disabled
+                      className="bg-black/40 border-gray-700 text-white opacity-70"
+                      value={form.code}
+                      onChange={() => {}}
+                    />
+                    <Button
+                      variant="outline"
+                      onClick={() => navigator.clipboard.writeText(form.code!)}
+                    >
+                      Copy
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex justify-end gap-2 mt-4">
@@ -550,6 +592,7 @@ export default function FixingsPage() {
                         ? undefined
                         : Number(form.freightUsd),
                   };
+                  // NOTE: le 'code' est généré côté serveur, inutile de l'envoyer
                   saveFixing.mutate(payload);
                 }}
               >
