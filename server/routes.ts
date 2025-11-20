@@ -1,7 +1,14 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage.js";
-import { loginSchema, insertChatMessageSchema, insertChatChannelSchema, insertProductSchema } from "@shared/schema";
+import {
+  loginSchema,
+  insertChatMessageSchema,
+  insertChatChannelSchema,
+  insertProductSchema,
+  // ✅ Clients
+  insertClientSchema,
+} from "@shared/schema";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // ---------------- Auth ----------------
@@ -355,6 +362,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ data: { id } });
     } catch {
       res.status(404).json({ message: "Product not found" });
+    }
+  });
+
+  // ----------------- ✅ Clients API -----------------
+  app.get("/api/clients", async (_req, res) => {
+    const rows = await storage.getAllClients();
+    res.json({ data: rows });
+  });
+
+  app.post("/api/clients", async (req, res) => {
+    try {
+      // ignore `id` if passed by mistake
+      const payload = insertClientSchema.omit({ id: true }).parse(req.body);
+      const saved = await storage.createClient(payload);
+      res.json({ data: saved });
+    } catch (e: any) {
+      res.status(400).json({ message: e?.message || "Invalid client payload" });
+    }
+  });
+
+  app.put("/api/clients/:id", async (req, res) => {
+    try {
+      const id = String(req.params.id);
+      // allow partial update; ignore id
+      const patch = insertClientSchema.omit({ id: true }).partial().parse(req.body || {});
+      const saved = await storage.updateClient(id, patch as any);
+      res.json({ data: saved });
+    } catch (e: any) {
+      res.status(400).json({ message: e?.message || "Failed to update client" });
+    }
+  });
+
+  app.delete("/api/clients/:id", async (req, res) => {
+    try {
+      const id = String(req.params.id);
+      await storage.deleteClient(id);
+      res.json({ data: { id } });
+    } catch {
+      res.status(404).json({ message: "Client not found" });
     }
   });
 

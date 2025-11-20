@@ -16,8 +16,9 @@ import Grades from "@/pages/grades";
 import Settings from "@/pages/settings";
 import NotFound from "@/pages/not-found";
 
-// ✅ NEW: page Produits
+// ✅ NEW: pages Produits & Clients
 import Products from "@/pages/products";
+import Clients from "@/pages/clients";
 
 function Router() {
   const { isAuthenticated } = useAuth();
@@ -32,8 +33,9 @@ function Router() {
       <Route path="/analytics" component={Analytics} />
       <Route path="/fixings" component={Fixings} />
       <Route path="/navires" component={Navires} />
-      {/* ✅ NEW: route /products */}
+      {/* ✅ NEW: routes produits & clients */}
       <Route path="/products" component={Products} />
+      <Route path="/clients" component={Clients} />
       <Route path="/knowledge" component={Knowledge} />
       <Route path="/settings" component={Settings} />
       <Route component={NotFound} />

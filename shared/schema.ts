@@ -1,12 +1,14 @@
 import { z } from "zod";
 
-// USERS
+/* ===========================
+   USERS
+   =========================== */
 export const insertUserSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(1),
   email: z.string().email(),
   password: z.string().min(1),
-  role: z.enum(["admin","senior","junior","viewer"]).default("viewer"),
+  role: z.enum(["admin", "senior", "junior", "viewer"]).default("viewer"),
   createdAt: z.date().optional(),
   updatedAt: z.date().optional(),
 });
@@ -18,7 +20,9 @@ export const userSchema = insertUserSchema.extend({
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = z.infer<typeof userSchema>;
 
-// OIL GRADES
+/* ===========================
+   OIL GRADES
+   =========================== */
 export const insertOilGradeSchema = z.object({
   id: z.number().optional(),
   name: z.string(),
@@ -34,7 +38,9 @@ export const oilGradeSchema = insertOilGradeSchema.extend({ id: z.number() });
 export type InsertOilGrade = z.infer<typeof insertOilGradeSchema>;
 export type OilGrade = z.infer<typeof oilGradeSchema>;
 
-// MARKET DATA
+/* ===========================
+   MARKET DATA
+   =========================== */
 export const insertMarketDataSchema = z.object({
   id: z.string().optional(),
   gradeId: z.number(),
@@ -49,7 +55,9 @@ export const marketDataSchema = insertMarketDataSchema.extend({ id: z.string() }
 export type InsertMarketData = z.infer<typeof insertMarketDataSchema>;
 export type MarketData = z.infer<typeof marketDataSchema>;
 
-// CHAT CHANNELS
+/* ===========================
+   CHAT CHANNELS
+   =========================== */
 export const insertChatChannelSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(1),
@@ -62,7 +70,9 @@ export const chatChannelSchema = insertChatChannelSchema.extend({
 export type InsertChatChannel = z.infer<typeof insertChatChannelSchema>;
 export type ChatChannel = z.infer<typeof chatChannelSchema>;
 
-// CHAT
+/* ===========================
+   CHAT
+   =========================== */
 export const insertChatMessageSchema = z.object({
   id: z.string().optional(),
   sender: z.string(),
@@ -79,17 +89,21 @@ export const chatMessageSchema = insertChatMessageSchema.extend({
 export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
 
-// AUTH
+/* ===========================
+   AUTH
+   =========================== */
 export const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
 });
 export type LoginRequest = z.infer<typeof loginSchema>;
 
-// ----------------- NEW: PRODUITS -----------------
+/* ===========================
+   PRODUITS
+   =========================== */
 export const productComponentSchema = z.object({
-  gradeName: z.string(),        // doit correspondre au name du grade
-  percent: z.number(),          // ex: 70.5 (pas "70,5%")
+  gradeName: z.string(),  // doit correspondre au name du grade
+  percent: z.number(),    // ex: 70.5 (pas "70,5%")
 });
 
 export const insertProductSchema = z.object({
@@ -105,3 +119,40 @@ export const productSchema = insertProductSchema.extend({
 });
 export type InsertProduct = z.infer<typeof insertProductSchema>;
 export type Product = z.infer<typeof productSchema>;
+
+/* ===========================
+   CLIENTS (NOUVEAU)
+   =========================== */
+export const marketEnum = z.enum(["LOCAL", "EXPORT"]);
+
+export const insertClientSchema = z.object({
+  id: z.string().optional(),
+
+  // Colonnes du tableau
+  market: marketEnum.default("LOCAL"),  // "Marché"
+  name: z.string().min(1),              // "Client"
+  paymentTerms: z.string().min(1),      // "Modalité" (ex: "120 j", "A vue")
+
+  // Champs optionnels (extensibilité future, non utilisés obligatoirement)
+  contactName: z.string().optional(),
+  email: z.string().email().optional(),
+  phone: z.string().optional(),
+  address: z.string().optional(),
+  city: z.string().optional(),
+  country: z.string().optional(),
+  taxId: z.string().optional(),
+  incoterm: z.string().optional(),
+  notes: z.string().optional(),
+
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+});
+
+export const clientSchema = insertClientSchema.extend({
+  id: z.string(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+});
+
+export type InsertClient = z.infer<typeof insertClientSchema>;
+export type Client = z.infer<typeof clientSchema>;

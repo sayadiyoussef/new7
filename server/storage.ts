@@ -4,6 +4,8 @@ import {
   type OilGrade, type InsertOilGrade,
   type MarketData, type InsertMarketData,
   type ChatMessage, type InsertChatMessage, type ChatChannel, type InsertChatChannel,
+  // ✅ Clients (depuis @shared/schema)
+  type Client, type InsertClient,
 } from "@shared/schema";
 
 type ForwardPoint = { period: string; ask: number; code: string };
@@ -103,11 +105,17 @@ export interface IStorage {
   deleteVessel(id:string): Promise<void>;
   createKnowledge(data:any): Promise<any>;
 
-  // --------- NEW: Produits ----------
+  // --------- Produits ----------
   getAllProducts(): Promise<Product[]>;
   createProduct(data: { name: string; reference?: string | null; composition: ProductComponent[] }): Promise<Product>;
   updateProduct(id: string, data: Partial<Omit<Product,"id"|"updatedAt">>): Promise<Product>;
   deleteProduct(id: string): Promise<void>;
+
+  // --------- ✅ Clients ----------
+  getAllClients(): Promise<Client[]>;
+  createClient(data: InsertClient): Promise<Client>;
+  updateClient(id: string, data: Partial<Omit<Client,"id"|"updatedAt">>): Promise<Client>;
+  deleteClient(id: string): Promise<void>;
 }
 
 class MemStorage implements IStorage {
@@ -124,8 +132,11 @@ class MemStorage implements IStorage {
   private forwardPrices = new Map<number, Array<{ gradeId: number; gradeName: string; code: string; period: string; ask: number }>>();
   private forwardCurves = new Map<string, ForwardPoint[]>();
 
-  // --------- NEW: stockage Produits ----------
+  // --------- Produits ----------
   private products = new Map<string, Product>();
+
+  // --------- ✅ Clients ----------
+  private clients = new Map<string, Client>();
 
   /** ✅ codes courts adaptés aux nouveaux noms */
   private codeFromGradeName(name: string): string {
@@ -266,13 +277,28 @@ class MemStorage implements IStorage {
     seed("EMAS 360-7", { "RBD PO": "70,5%", "RBD POL IV56": "20,5%", "RBD PS": "10,5%" });
     seed("EMAS 360-9", { "RBD PO": "70,5%", "RBD POL IV56": "10,5%", "RBD PS": "20,5%" });
     seed("EMAS 404",   { "RBD PO": "101,50%" });
-    
     seed("KERNEL 357", { "RBD PKO": "101,50%" });
     seed("HELIOS 360-7", { "RBD PO": "65,5%", "RBD POL IV56": "5,5%", "RBD CNO": "30,5%" });
     seed("ALBA 304-3", { "RBD POL IV64": "101,50%" });
     seed("CBS PREMIUM", { "RBD PKS": "101,50%" });
     seed("IRIS-204", { "RBD POL IV56": "101,50%" });
     seed("HVSJ", { "CDSBO": "105%" });
+
+    // ▶︎ ✅ NEW: Seed Clients
+    const seedClient = (market: "LOCAL" | "EXPORT", name: string, paymentTerms: string) => {
+      const id = randomUUID();
+      this.clients.set(id, {
+        id,
+        market,
+        name,
+        paymentTerms,
+        updatedAt: new Date().toISOString(),
+      } as Client);
+    };
+    seedClient("LOCAL", "SOTUBI", "120 j");
+    seedClient("LOCAL", "GEPACO", "90 j");
+    seedClient("EXPORT", "FDD", "A vue");
+    seedClient("EXPORT", "AIGUEBELLE", "60 j");
   }
 
   // Users
@@ -552,6 +578,39 @@ class MemStorage implements IStorage {
   }
   async deleteProduct(id: string) {
     this.products.delete(id);
+  }
+
+  // ------------------- ✅ Clients -------------------
+  async getAllClients() {
+    return Array.from(this.clients.values()).sort((a,b)=> a.name.localeCompare(b.name));
+  }
+  async createClient(data: InsertClient) {
+    const id = randomUUID();
+    const c: Client = {
+      id,
+      name: data.name,
+      market: data.market,
+      paymentTerms: data.paymentTerms,
+      updatedAt: new Date().toISOString(),
+    };
+    this.clients.set(id, c);
+    return c;
+  }
+  async updateClient(id: string, data: Partial<Omit<Client,"id"|"updatedAt">>) {
+    const existing = this.clients.get(id);
+    if (!existing) throw new Error("Client not found");
+    const next: Client = {
+      ...existing,
+      ...("name" in data ? { name: String(data.name) } : {}),
+      ...("market" in data ? { market: data.market as Client["market"] } : {}),
+      ...("paymentTerms" in data ? { paymentTerms: String((data as any).paymentTerms) } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    this.clients.set(id, next);
+    return next;
+  }
+  async deleteClient(id: string) {
+    this.clients.delete(id);
   }
 }
 

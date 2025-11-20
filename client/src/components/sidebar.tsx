@@ -11,7 +11,8 @@ import {
   Settings,
   LogOut,
   Droplets,
-  Package, // icon pour Products
+  Package,   // Products
+  Users,     // ✅ NEW: Clients
 } from "lucide-react";
 
 const navigation = [
@@ -20,6 +21,8 @@ const navigation = [
   { name: "Navires", href: "/navires", icon: Droplets },
   // ✅ placé juste après Navires
   { name: "Products", href: "/products", icon: Package },
+  // ✅ NEW: Clients juste après Products
+  { name: "Clients", href: "/clients", icon: Users },
   { name: "Base de connaissance", href: "/knowledge", icon: Layers },
   { name: "Market Data", href: "/market", icon: TrendingUp },
   { name: "Oil Grades", href: "/grades", icon: Layers },

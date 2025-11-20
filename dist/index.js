@@ -66,8 +66,10 @@ var init_storage = __esm({
       chatChannels = /* @__PURE__ */ new Map();
       forwardPrices = /* @__PURE__ */ new Map();
       forwardCurves = /* @__PURE__ */ new Map();
-      // --------- NEW: stockage Produits ----------
+      // --------- Produits ----------
       products = /* @__PURE__ */ new Map();
+      // --------- ✅ Clients ----------
+      clients = /* @__PURE__ */ new Map();
       /** ✅ codes courts adaptés aux nouveaux noms */
       codeFromGradeName(name) {
         const map = {
@@ -201,6 +203,20 @@ var init_storage = __esm({
         seed("CBS PREMIUM", { "RBD PKS": "101,50%" });
         seed("IRIS-204", { "RBD POL IV56": "101,50%" });
         seed("HVSJ", { "CDSBO": "105%" });
+        const seedClient = (market, name, paymentTerms) => {
+          const id = randomUUID();
+          this.clients.set(id, {
+            id,
+            market,
+            name,
+            paymentTerms,
+            updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+          });
+        };
+        seedClient("LOCAL", "SOTUBI", "120 j");
+        seedClient("LOCAL", "GEPACO", "90 j");
+        seedClient("EXPORT", "FDD", "A vue");
+        seedClient("EXPORT", "AIGUEBELLE", "60 j");
       }
       // Users
       async getUser(id) {
@@ -455,6 +471,38 @@ var init_storage = __esm({
       }
       async deleteProduct(id) {
         this.products.delete(id);
+      }
+      // ------------------- ✅ Clients -------------------
+      async getAllClients() {
+        return Array.from(this.clients.values()).sort((a, b) => a.name.localeCompare(b.name));
+      }
+      async createClient(data) {
+        const id = randomUUID();
+        const c = {
+          id,
+          name: data.name,
+          market: data.market,
+          paymentTerms: data.paymentTerms,
+          updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        this.clients.set(id, c);
+        return c;
+      }
+      async updateClient(id, data) {
+        const existing = this.clients.get(id);
+        if (!existing) throw new Error("Client not found");
+        const next = {
+          ...existing,
+          ..."name" in data ? { name: String(data.name) } : {},
+          ..."market" in data ? { market: data.market } : {},
+          ..."paymentTerms" in data ? { paymentTerms: String(data.paymentTerms) } : {},
+          updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        this.clients.set(id, next);
+        return next;
+      }
+      async deleteClient(id) {
+        this.clients.delete(id);
       }
     };
     storage = new MemStorage();
@@ -802,6 +850,34 @@ var productSchema = insertProductSchema.extend({
   id: z.string(),
   updatedAt: z.string()
 });
+var marketEnum = z.enum(["LOCAL", "EXPORT"]);
+var insertClientSchema = z.object({
+  id: z.string().optional(),
+  // Colonnes du tableau
+  market: marketEnum.default("LOCAL"),
+  // "Marché"
+  name: z.string().min(1),
+  // "Client"
+  paymentTerms: z.string().min(1),
+  // "Modalité" (ex: "120 j", "A vue")
+  // Champs optionnels (extensibilité future, non utilisés obligatoirement)
+  contactName: z.string().optional(),
+  email: z.string().email().optional(),
+  phone: z.string().optional(),
+  address: z.string().optional(),
+  city: z.string().optional(),
+  country: z.string().optional(),
+  taxId: z.string().optional(),
+  incoterm: z.string().optional(),
+  notes: z.string().optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional()
+});
+var clientSchema = insertClientSchema.extend({
+  id: z.string(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional()
+});
 
 // server/routes.ts
 async function registerRoutes(app) {
@@ -1111,6 +1187,38 @@ async function registerRoutes(app) {
       res.json({ data: { id } });
     } catch {
       res.status(404).json({ message: "Product not found" });
+    }
+  });
+  app.get("/api/clients", async (_req, res) => {
+    const rows = await storage.getAllClients();
+    res.json({ data: rows });
+  });
+  app.post("/api/clients", async (req, res) => {
+    try {
+      const payload = insertClientSchema.omit({ id: true }).parse(req.body);
+      const saved = await storage.createClient(payload);
+      res.json({ data: saved });
+    } catch (e) {
+      res.status(400).json({ message: e?.message || "Invalid client payload" });
+    }
+  });
+  app.put("/api/clients/:id", async (req, res) => {
+    try {
+      const id = String(req.params.id);
+      const patch = insertClientSchema.omit({ id: true }).partial().parse(req.body || {});
+      const saved = await storage.updateClient(id, patch);
+      res.json({ data: saved });
+    } catch (e) {
+      res.status(400).json({ message: e?.message || "Failed to update client" });
+    }
+  });
+  app.delete("/api/clients/:id", async (req, res) => {
+    try {
+      const id = String(req.params.id);
+      await storage.deleteClient(id);
+      res.json({ data: { id } });
+    } catch {
+      res.status(404).json({ message: "Client not found" });
     }
   });
   app.all("/api/*", (_req, res) => {
