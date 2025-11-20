@@ -266,6 +266,7 @@ class MemStorage implements IStorage {
     seed("EMAS 360-7", { "RBD PO": "70,5%", "RBD POL IV56": "20,5%", "RBD PS": "10,5%" });
     seed("EMAS 360-9", { "RBD PO": "70,5%", "RBD POL IV56": "10,5%", "RBD PS": "20,5%" });
     seed("EMAS 404",   { "RBD PO": "101,50%" });
+    
     seed("KERNEL 357", { "RBD PKO": "101,50%" });
     seed("HELIOS 360-7", { "RBD PO": "65,5%", "RBD POL IV56": "5,5%", "RBD CNO": "30,5%" });
     seed("ALBA 304-3", { "RBD POL IV64": "101,50%" });
@@ -548,7 +549,7 @@ class MemStorage implements IStorage {
     };
     this.products.set(id, next);
     return next;
-    }
+  }
   async deleteProduct(id: string) {
     this.products.delete(id);
   }
