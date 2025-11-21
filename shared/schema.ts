@@ -104,7 +104,6 @@ export const productComponentSchema = z.object({
   gradeName: z.string(),    // doit correspondre au "name" du grade
   percent: z.number(),      // ex: 70.5 (pas "70,5%")
 });
-
 export const insertProductSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(1),
@@ -120,17 +119,17 @@ export type InsertProduct = z.infer<typeof insertProductSchema>;
 export type Product = z.infer<typeof productSchema>;
 
 /* ===========================
-   CLIENTS  (rétro-compat: terms || paymentTerms)
+   CLIENTS
    =========================== */
 export const marketEnum = z.enum(["LOCAL", "EXPORT"]);
 
-// Schéma d’entrée tolérant les deux clés. Normalisation -> paymentTerms
-const rawInsertClientSchema = z.object({
+/** Schéma d'entrée “pur” — supporte .omit() / .partial() dans les routes */
+export const insertClientInputSchema = z.object({
   id: z.string().optional(),
   market: marketEnum.default("LOCAL"),
   name: z.string().min(1),
 
-  // on accepte les deux, un seul requis
+  // on accepte l'ancien et le nouveau nom, un des deux doit être présent
   paymentTerms: z.string().min(1).optional(),
   terms: z.string().min(1).optional(),
 
@@ -143,7 +142,6 @@ const rawInsertClientSchema = z.object({
   taxId: z.string().optional(),
   incoterm: z.string().optional(),
   notes: z.string().optional(),
-
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
 })
@@ -155,23 +153,21 @@ const rawInsertClientSchema = z.object({
       path: ["paymentTerms"],
     });
   }
-})
-.transform(v => ({
+});
+
+/** Schéma d'entrée normalisé (ZodEffects) — **ne pas** .extend/.omit dessus */
+export const insertClientSchema = insertClientInputSchema.transform(v => ({
   ...v,
-  paymentTerms: v.paymentTerms ?? v.terms!, // normalisation
-  terms: undefined,                          // on retire l’alias
+  terms: v.terms ?? v.paymentTerms!,  // normalise en `terms`
+  paymentTerms: undefined as unknown as never,
 }));
 
-export const insertClientSchema = rawInsertClientSchema;
-
-// ⚠️ NE PAS utiliser .extend() sur un ZodEffects.
-// On définit le schéma complet explicitement.
+/** Schéma de sortie/stockage — indépendant (z.object), OK pour .extend si besoin */
 export const clientSchema = z.object({
   id: z.string(),
-  market: marketEnum.default("LOCAL"),
-  name: z.string().min(1),
-  paymentTerms: z.string().min(1),
-
+  market: marketEnum,
+  name: z.string(),
+  terms: z.string().min(1),
   contactName: z.string().optional(),
   email: z.string().email().optional(),
   phone: z.string().optional(),
@@ -181,134 +177,115 @@ export const clientSchema = z.object({
   taxId: z.string().optional(),
   incoterm: z.string().optional(),
   notes: z.string().optional(),
-
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
 });
 
 export type InsertClient = z.infer<typeof insertClientSchema>;
-export type Client       = z.infer<typeof clientSchema>;
+export type Client = z.infer<typeof clientSchema>;
 
 /* ===========================
-   CONTRATS (rétro-compat: date/quantityT  || contractDate/quantityTons)
+   CONTRATS
    =========================== */
 export const contractMarketEnum = z.enum(["LOCAL", "EXPORT"]);
 export const priceCurrencyEnum = z.enum(["USD", "TND"]);
 
-// Schéma d’insert tolérant anciens noms, avec normalisation.
-const rawInsertContractSchema = z.object({
+/** Schéma d'entrée “pur” (routes) */
+export const insertContractInputSchema = z.object({
   id: z.string().optional(),
 
-  // métadonnées
   code: z.string().optional(),
-  market: contractMarketEnum,
+  market: contractMarketEnum.default("LOCAL"),
 
-  // ancien: date / nouveau: contractDate
+  // ancien/nouveau alias
   contractDate: z.string().optional(),
   date: z.string().optional(),
 
-  // liaisons
   clientId: z.string(),
   clientName: z.string().optional(),
   productId: z.string(),
   productName: z.string().optional(),
 
-  // ancien: quantityT / nouveau: quantityTons
+  // ancien/nouveau alias
   quantityTons: z.number().positive().optional(),
   quantityT: z.number().positive().optional(),
 
-  // prix
+  // prix (on laisse les 2 champs, la devise permet de savoir lequel est requis)
   priceCurrency: priceCurrencyEnum.optional(),
   priceUsd: z.number().optional(),
   priceTnd: z.number().optional(),
   fxRate: z.number().positive().optional(),
 
-  // période
-  startDate: z.string(),
-  endDate: z.string(),
+  // période : désormais optionnelles
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
 
-  // divers
   notes: z.string().optional(),
-
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
-})
-.transform(v => {
-  const contractDate = v.contractDate ?? v.date ?? new Date().toISOString().slice(0, 10);
-  const quantityTons = v.quantityTons ?? v.quantityT ?? 0;
-
-  const priceCurrency: "USD" | "TND" =
-    v.priceCurrency ?? (v.priceUsd != null ? "USD" : "TND");
-
-  return {
-    ...v,
-    contractDate,
-    quantityTons,
-    priceCurrency,
-  };
-})
-.superRefine((v, ctx) => {
-  if (v.priceCurrency === "USD" && (v.priceUsd == null)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "priceUsd est requis lorsque priceCurrency = USD",
-      path: ["priceUsd"],
-    });
-  }
-  if (v.priceCurrency === "TND" && (v.priceTnd == null)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "priceTnd est requis lorsque priceCurrency = TND",
-      path: ["priceTnd"],
-    });
-  }
-  if (!v.contractDate) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "contractDate est requis",
-      path: ["contractDate"],
-    });
-  }
-  if (!v.quantityTons || v.quantityTons <= 0) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "quantityTons doit être > 0",
-      path: ["quantityTons"],
-    });
-  }
 });
 
-export const insertContractSchema = rawInsertContractSchema;
+/** Schéma d'entrée normalisé (ZodEffects) */
+export const insertContractSchema = insertContractInputSchema
+  .transform(v => {
+    const contractDate = v.contractDate ?? v.date ?? new Date().toISOString().slice(0, 10);
+    const quantityTons = v.quantityTons ?? v.quantityT ?? 0;
+    const priceCurrency: "USD" | "TND" =
+      v.priceCurrency ?? (v.priceUsd != null ? "USD" : "TND");
 
-// Schéma “persisté” (pas d’extend sur ZodEffects)
+    const startDate = v.startDate ?? contractDate;
+    const endDate = v.endDate ?? contractDate;
+
+    return {
+      ...v,
+      market: v.market ?? "LOCAL",
+      contractDate,
+      quantityTons,
+      priceCurrency,
+      startDate,
+      endDate,
+    };
+  })
+  .superRefine((v, ctx) => {
+    if (v.priceCurrency === "USD" && (v.priceUsd == null)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "priceUsd est requis lorsque priceCurrency = USD", path: ["priceUsd"] });
+    }
+    if (v.priceCurrency === "TND" && (v.priceTnd == null)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "priceTnd est requis lorsque priceCurrency = TND", path: ["priceTnd"] });
+    }
+    if (!v.contractDate) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "contractDate est requis", path: ["contractDate"] });
+    }
+    if (!v.quantityTons || v.quantityTons <= 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "quantityTons doit être > 0", path: ["quantityTons"] });
+    }
+  });
+
+/** Schéma de sortie/stockage — indépendant */
 export const contractSchema = z.object({
   id: z.string(),
   code: z.string(),
-
-  // métadonnées normalisées
   market: contractMarketEnum,
   contractDate: z.string(),
 
-  // liaisons
   clientId: z.string(),
   clientName: z.string().optional(),
   productId: z.string(),
   productName: z.string().optional(),
 
-  // commerce
-  quantityTons: z.number().positive(),
-  priceCurrency: priceCurrencyEnum,
+  // on tolère quantityT ou quantityTons selon le storage
+  quantityT: z.number().positive().optional(),
+  quantityTons: z.number().positive().optional(),
+
+  priceCurrency: priceCurrencyEnum.optional(),
   priceUsd: z.number().optional(),
   priceTnd: z.number().optional(),
   fxRate: z.number().positive().optional(),
 
-  // période
   startDate: z.string(),
   endDate: z.string(),
 
-  // divers
   notes: z.string().optional(),
-
   createdAt: z.string(),
   updatedAt: z.string(),
 });

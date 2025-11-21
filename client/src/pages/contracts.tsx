@@ -8,30 +8,34 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Pencil, Trash2, PlusCircle } from "lucide-react";
 
-/** ---------- Types basiques (coté UI) ---------- */
+/** ---------- Types basiques (côté UI) ---------- */
 type Market = "LOCAL" | "EXPORT";
 type Client = { id: string; name: string; market: Market; paymentTerms?: string };
 type Product = { id: string; name: string; reference?: string | null };
 
-type Contract = {
+/** 
+ * Type interne UI (ne reflète pas exactement l'API, on fait le mapping).
+ */
+type ContractUI = {
   id?: string;
-  code?: string;           // généré côté backend (incrémental par marché+année)
-  market: Market;          // redondant (dérivé du client) mais pratique pour l’affichage
+  code?: string;
+  market: Market;
   clientId: string;
-  clientName?: string;     // dénormalisé pour l’affichage
+  clientName?: string;
   productId: string;
-  productName?: string;    // dénormalisé pour l’affichage
-  quantityT: number;       // en tonnes
+  productName?: string;
+  quantityT: number;
   priceCurrency: "USD" | "TND";
-  pricePerT: number;       // prix par tonne dans la devise ci-dessus
-  fxRate: number;          // taux de change utilisé (USD->TND)
-  dateStart: string;       // YYYY-MM-DD
-  dateEnd: string;         // YYYY-MM-DD
-  contractDate: string;    // YYYY-MM-DD (par défaut aujourd’hui, modifiable)
+  pricePerT: number;      // prix/T dans la devise choisie
+  fxRate: number;         // taux de change (optionnel métier)
+  dateStart: string;      // YYYY-MM-DD
+  dateEnd: string;        // YYYY-MM-DD
+  contractDate: string;   // YYYY-MM-DD
   createdAt?: string;
   updatedAt?: string;
 };
 
+/** ---------- Helpers fetch ---------- */
 const fetchJSON = async (url: string, init?: RequestInit) => {
   const res = await fetch(url, init);
   const text = await res.text();
@@ -40,6 +44,73 @@ const fetchJSON = async (url: string, init?: RequestInit) => {
 };
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
+
+/** 
+ * Normalise un contrat renvoyé par l’API (nouveau schéma) vers notre shape UI.
+ * L’API peut renvoyer : quantityTons, priceUsd/priceTnd, startDate/endDate, contractDate, market…
+ * On remplit les champs UI : quantityT, pricePerT, dateStart, dateEnd, etc.
+ */
+function apiToUI(c: any): ContractUI {
+  const quantityT = c.quantityT ?? c.quantityTons ?? 0;
+  const dateStart = c.dateStart ?? c.startDate ?? c.contractDate ?? todayStr();
+  const dateEnd   = c.dateEnd   ?? c.endDate   ?? c.contractDate ?? todayStr();
+  const contractDate = c.contractDate ?? c.date ?? todayStr();
+  // prix/T : on choisit la bonne source selon la devise
+  const priceCurrency: "USD" | "TND" = c.priceCurrency ?? (c.priceUsd != null ? "USD" : "TND");
+  const pricePerT = priceCurrency === "USD" ? (c.pricePerT ?? c.priceUsd ?? 0) : (c.pricePerT ?? c.priceTnd ?? 0);
+
+  return {
+    id: c.id,
+    code: c.code,
+    market: c.market ?? "LOCAL",
+    clientId: c.clientId,
+    clientName: c.clientName,
+    productId: c.productId,
+    productName: c.productName,
+    quantityT: Number(quantityT) || 0,
+    priceCurrency,
+    pricePerT: Number(pricePerT) || 0,
+    fxRate: c.fxRate != null ? Number(c.fxRate) : 0,
+    dateStart,
+    dateEnd,
+    contractDate,
+    createdAt: c.createdAt,
+    updatedAt: c.updatedAt,
+  };
+}
+
+/** 
+ * Mappe notre formulaire UI vers le payload attendu par l’API.
+ * - quantityT   -> quantityTons
+ * - pricePerT   -> priceUsd ou priceTnd selon priceCurrency
+ * - dateStart   -> startDate
+ * - dateEnd     -> endDate
+ * - contractDate idem
+ * - market envoyé (le serveur a un défaut LOCAL si absent)
+ */
+function uiToApiPayload(f: ContractUI) {
+  const base: any = {
+    clientId: f.clientId,
+    productId: f.productId,
+    quantityTons: Number(f.quantityT) || 0,
+    priceCurrency: f.priceCurrency,                 // "USD" | "TND"
+    fxRate: f.fxRate ? Number(f.fxRate) : undefined,
+    contractDate: f.contractDate,
+    startDate: f.dateStart,
+    endDate: f.dateEnd,
+    market: f.market,                               // optionnel côté serveur (défaut LOCAL)
+  };
+
+  if (f.priceCurrency === "USD") {
+    base.priceUsd = Number(f.pricePerT) || 0;
+    // on n’envoie pas priceTnd
+  } else {
+    base.priceTnd = Number(f.pricePerT) || 0;
+    // on n’envoie pas priceUsd
+  }
+
+  return base;
+}
 
 export default function ContractsPage() {
   const qc = useQueryClient();
@@ -62,13 +133,17 @@ export default function ContractsPage() {
     queryKey: ["/api/contracts"],
     queryFn: () => fetchJSON("/api/contracts"),
   });
-  const rows: Contract[] = useMemo(() => (contractsRes as any)?.data ?? [], [contractsRes]);
+
+  const rows: ContractUI[] = useMemo(() => {
+    const raw = (contractsRes as any)?.data ?? [];
+    return raw.map(apiToUI);
+  }, [contractsRes]);
 
   /** --------- UI state --------- */
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  const [form, setForm] = useState<Contract>({
+  const emptyForm: ContractUI = {
     clientId: "",
     productId: "",
     market: "LOCAL",
@@ -79,40 +154,19 @@ export default function ContractsPage() {
     dateStart: todayStr(),
     dateEnd: todayStr(),
     contractDate: todayStr(),
-  });
+  };
 
-  const resetForm = () =>
-    setForm({
-      clientId: "",
-      productId: "",
-      market: "LOCAL",
-      quantityT: 0,
-      priceCurrency: "USD",
-      pricePerT: 0,
-      fxRate: 3.2,
-      dateStart: todayStr(),
-      dateEnd: todayStr(),
-      contractDate: todayStr(),
-    });
+  const [form, setForm] = useState<ContractUI>(emptyForm);
+  const resetForm = () => setForm(emptyForm);
 
   /** --------- Mutations --------- */
   const saveContract = useMutation({
-    mutationFn: async (payload: Contract) => {
+    mutationFn: async (payload: ContractUI) => {
       const isEdit = !!editingId;
       const url = isEdit ? `/api/contracts/${editingId}` : "/api/contracts";
       const method = isEdit ? "PUT" : "POST";
-      // Le code est généré côté backend en fonction market+année => on n’envoie pas "code"
-      const body = {
-        clientId: payload.clientId,
-        productId: payload.productId,
-        quantityT: Number(payload.quantityT) || 0,
-        priceCurrency: payload.priceCurrency,
-        pricePerT: Number(payload.pricePerT) || 0,
-        fxRate: Number(payload.fxRate) || 0,
-        dateStart: payload.dateStart,
-        dateEnd: payload.dateEnd,
-        contractDate: payload.contractDate,
-      };
+
+      const body = uiToApiPayload(payload);
       return fetchJSON(url, {
         method,
         headers: { "Content-Type": "application/json" },
@@ -120,22 +174,22 @@ export default function ContractsPage() {
       });
     },
     onSuccess: (res: any) => {
-      const saved: Contract = res?.data;
-      // maj cache (optimiste + refetch pour rester safe)
+      const saved = apiToUI(res?.data);
+      // maj cache (optimiste + refetch safe)
       qc.setQueryData(["/api/contracts"], (prev: any) => {
-        const prevArr: Contract[] = prev?.data ?? [];
+        const prevArr: ContractUI[] = (prev?.data ?? []).map(apiToUI);
         if (!saved) return prev;
         if (editingId) {
           const next = prevArr.map(c => (c.id === saved.id ? saved : c));
           return { data: next };
-        } else {
-          return { data: [saved, ...prevArr] };
         }
+        return { data: [saved, ...prevArr] };
       });
       qc.invalidateQueries({ queryKey: ["/api/contracts"] });
       qc.refetchQueries({ queryKey: ["/api/contracts"] });
       setOpen(false);
       setEditingId(null);
+      resetForm();
     },
     onError: (e: any) => {
       alert(`Erreur enregistrement contrat:\n${e?.message || e}`);
@@ -146,7 +200,7 @@ export default function ContractsPage() {
     mutationFn: async (id: string) => fetchJSON(`/api/contracts/${id}`, { method: "DELETE" }),
     onSuccess: (_res: any, id: string) => {
       qc.setQueryData(["/api/contracts"], (prev: any) => {
-        const prevArr: Contract[] = prev?.data ?? [];
+        const prevArr: ContractUI[] = (prev?.data ?? []).map(apiToUI);
         return { data: prevArr.filter(c => c.id !== id) };
       });
       qc.invalidateQueries({ queryKey: ["/api/contracts"] });
@@ -159,7 +213,6 @@ export default function ContractsPage() {
 
   /** --------- Helpers UI --------- */
   const selectedClient = clients.find(c => c.id === form.clientId) || null;
-  const selectedProduct = products.find(p => p.id === form.productId) || null;
 
   // Quand on change de client, caler le marché automatiquement
   const handleClientChange = (id: string) => {
@@ -258,7 +311,7 @@ export default function ContractsPage() {
                                     clientId: r.clientId,
                                     productId: r.productId,
                                     market: r.market,
-                                  } as Contract);
+                                  } as ContractUI);
                                   setOpen(true);
                                 }}
                               >
@@ -316,7 +369,7 @@ export default function ContractsPage() {
                 </select>
               </div>
 
-              {/* Marché (auto depuis client, mais modifiable si besoin) */}
+              {/* Marché */}
               <div>
                 <Label className="text-sm">Marché</Label>
                 <select
@@ -329,7 +382,7 @@ export default function ContractsPage() {
                 </select>
               </div>
 
-              {/* Date contrat (aujourd’hui par défaut) */}
+              {/* Date contrat */}
               <div>
                 <Label className="text-sm">Date contrat</Label>
                 <Input
@@ -437,7 +490,7 @@ export default function ContractsPage() {
                   if (!form.pricePerT || form.pricePerT <= 0) return alert("Saisis un prix par tonne.");
                   if (!form.contractDate) return alert("La date de contrat est requise.");
 
-                  const payload: Contract = { ...form };
+                  const payload: ContractUI = { ...form };
                   saveContract.mutate(payload);
                 }}
               >

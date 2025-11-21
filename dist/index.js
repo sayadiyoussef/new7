@@ -900,7 +900,6 @@ import express2 from "express";
 // server/routes.ts
 init_storage();
 import { createServer } from "http";
-import { z as z2 } from "zod";
 
 // shared/schema.ts
 import { z } from "zod";
@@ -987,11 +986,11 @@ var productSchema = insertProductSchema.extend({
   updatedAt: z.string()
 });
 var marketEnum = z.enum(["LOCAL", "EXPORT"]);
-var rawInsertClientSchema = z.object({
+var insertClientInputSchema = z.object({
   id: z.string().optional(),
   market: marketEnum.default("LOCAL"),
   name: z.string().min(1),
-  // on accepte les deux, un seul requis
+  // on accepte l'ancien et le nouveau nom, un des deux doit être présent
   paymentTerms: z.string().min(1).optional(),
   terms: z.string().min(1).optional(),
   contactName: z.string().optional(),
@@ -1013,19 +1012,18 @@ var rawInsertClientSchema = z.object({
       path: ["paymentTerms"]
     });
   }
-}).transform((v) => ({
+});
+var insertClientSchema = insertClientInputSchema.transform((v) => ({
   ...v,
-  paymentTerms: v.paymentTerms ?? v.terms,
-  // normalisation
-  terms: void 0
-  // on retire l’alias
+  terms: v.terms ?? v.paymentTerms,
+  // normalise en `terms`
+  paymentTerms: void 0
 }));
-var insertClientSchema = rawInsertClientSchema;
 var clientSchema = z.object({
   id: z.string(),
-  market: marketEnum.default("LOCAL"),
-  name: z.string().min(1),
-  paymentTerms: z.string().min(1),
+  market: marketEnum,
+  name: z.string(),
+  terms: z.string().min(1),
   contactName: z.string().optional(),
   email: z.string().email().optional(),
   phone: z.string().optional(),
@@ -1040,96 +1038,79 @@ var clientSchema = z.object({
 });
 var contractMarketEnum = z.enum(["LOCAL", "EXPORT"]);
 var priceCurrencyEnum = z.enum(["USD", "TND"]);
-var rawInsertContractSchema = z.object({
+var insertContractInputSchema = z.object({
   id: z.string().optional(),
-  // métadonnées
   code: z.string().optional(),
-  market: contractMarketEnum,
-  // ancien: date / nouveau: contractDate
+  market: contractMarketEnum.default("LOCAL"),
+  // ancien/nouveau alias
   contractDate: z.string().optional(),
   date: z.string().optional(),
-  // liaisons
   clientId: z.string(),
   clientName: z.string().optional(),
   productId: z.string(),
   productName: z.string().optional(),
-  // ancien: quantityT / nouveau: quantityTons
+  // ancien/nouveau alias
   quantityTons: z.number().positive().optional(),
   quantityT: z.number().positive().optional(),
-  // prix
+  // prix (on laisse les 2 champs, la devise permet de savoir lequel est requis)
   priceCurrency: priceCurrencyEnum.optional(),
   priceUsd: z.number().optional(),
   priceTnd: z.number().optional(),
   fxRate: z.number().positive().optional(),
-  // période
-  startDate: z.string(),
-  endDate: z.string(),
-  // divers
+  // période : désormais optionnelles
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
   notes: z.string().optional(),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional()
-}).transform((v) => {
+});
+var insertContractSchema = insertContractInputSchema.transform((v) => {
   const contractDate = v.contractDate ?? v.date ?? (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
   const quantityTons = v.quantityTons ?? v.quantityT ?? 0;
   const priceCurrency = v.priceCurrency ?? (v.priceUsd != null ? "USD" : "TND");
+  const startDate = v.startDate ?? contractDate;
+  const endDate = v.endDate ?? contractDate;
   return {
     ...v,
+    market: v.market ?? "LOCAL",
     contractDate,
     quantityTons,
-    priceCurrency
+    priceCurrency,
+    startDate,
+    endDate
   };
 }).superRefine((v, ctx) => {
   if (v.priceCurrency === "USD" && v.priceUsd == null) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "priceUsd est requis lorsque priceCurrency = USD",
-      path: ["priceUsd"]
-    });
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "priceUsd est requis lorsque priceCurrency = USD", path: ["priceUsd"] });
   }
   if (v.priceCurrency === "TND" && v.priceTnd == null) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "priceTnd est requis lorsque priceCurrency = TND",
-      path: ["priceTnd"]
-    });
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "priceTnd est requis lorsque priceCurrency = TND", path: ["priceTnd"] });
   }
   if (!v.contractDate) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "contractDate est requis",
-      path: ["contractDate"]
-    });
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "contractDate est requis", path: ["contractDate"] });
   }
   if (!v.quantityTons || v.quantityTons <= 0) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "quantityTons doit \xEAtre > 0",
-      path: ["quantityTons"]
-    });
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "quantityTons doit \xEAtre > 0", path: ["quantityTons"] });
   }
 });
-var insertContractSchema = rawInsertContractSchema;
 var contractSchema = z.object({
   id: z.string(),
   code: z.string(),
-  // métadonnées normalisées
   market: contractMarketEnum,
   contractDate: z.string(),
-  // liaisons
   clientId: z.string(),
   clientName: z.string().optional(),
   productId: z.string(),
   productName: z.string().optional(),
-  // commerce
-  quantityTons: z.number().positive(),
-  priceCurrency: priceCurrencyEnum,
+  // on tolère quantityT ou quantityTons selon le storage
+  quantityT: z.number().positive().optional(),
+  quantityTons: z.number().positive().optional(),
+  priceCurrency: priceCurrencyEnum.optional(),
   priceUsd: z.number().optional(),
   priceTnd: z.number().optional(),
   fxRate: z.number().positive().optional(),
-  // période
   startDate: z.string(),
   endDate: z.string(),
-  // divers
   notes: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string()
@@ -1445,34 +1426,32 @@ async function registerRoutes(app) {
       res.status(404).json({ message: "Product not found" });
     }
   });
-  const clientBaseForPost = z2.object({
-    id: z2.string().optional(),
-    market: z2.enum(["LOCAL", "EXPORT"]).optional(),
-    // défaut géré dans le shared
-    name: z2.string(),
-    paymentTerms: z2.string().optional(),
-    terms: z2.string().optional(),
-    contactName: z2.string().optional(),
-    email: z2.string().email().optional(),
-    phone: z2.string().optional(),
-    address: z2.string().optional(),
-    city: z2.string().optional(),
-    country: z2.string().optional(),
-    taxId: z2.string().optional(),
-    incoterm: z2.string().optional(),
-    notes: z2.string().optional(),
-    createdAt: z2.string().optional(),
-    updatedAt: z2.string().optional()
-  });
-  const clientBaseForPut = clientBaseForPost.partial();
   app.get("/api/clients", async (_req, res) => {
     const rows = await storage.getAllClients();
     res.json({ data: rows });
   });
   app.post("/api/clients", async (req, res) => {
     try {
-      const base = clientBaseForPost.parse(req.body);
-      const payload = insertClientSchema.parse(base);
+      const b = req.body || {};
+      const market = b.market === "EXPORT" ? "EXPORT" : "LOCAL";
+      const name = String(b.name ?? "").trim();
+      const terms = String(b.terms ?? b.paymentTerms ?? "").trim();
+      if (!name) return res.status(400).json({ message: "name is required" });
+      if (!terms) return res.status(400).json({ message: "terms/paymentTerms is required" });
+      const payload = {
+        market,
+        name,
+        terms,
+        contactName: b.contactName ? String(b.contactName) : void 0,
+        email: b.email ? String(b.email) : void 0,
+        phone: b.phone ? String(b.phone) : void 0,
+        address: b.address ? String(b.address) : void 0,
+        city: b.city ? String(b.city) : void 0,
+        country: b.country ? String(b.country) : void 0,
+        taxId: b.taxId ? String(b.taxId) : void 0,
+        incoterm: b.incoterm ? String(b.incoterm) : void 0,
+        notes: b.notes ? String(b.notes) : void 0
+      };
       const saved = await storage.createClient(payload);
       res.json({ data: saved });
     } catch (e) {
@@ -1482,8 +1461,24 @@ async function registerRoutes(app) {
   app.put("/api/clients/:id", async (req, res) => {
     try {
       const id = String(req.params.id);
-      const basePatch = clientBaseForPut.parse(req.body || {});
-      const patch = insertClientSchema.parse(basePatch);
+      const b = req.body || {};
+      const patch = {};
+      if (b.name !== void 0) patch.name = String(b.name).trim();
+      if (b.market !== void 0) patch.market = b.market === "EXPORT" ? "EXPORT" : "LOCAL";
+      if (b.terms !== void 0 || b.paymentTerms !== void 0) {
+        const v = String(b.terms ?? b.paymentTerms ?? "").trim();
+        if (!v) return res.status(400).json({ message: "terms/paymentTerms cannot be empty" });
+        patch.terms = v;
+      }
+      if (b.contactName !== void 0) patch.contactName = b.contactName ? String(b.contactName) : void 0;
+      if (b.email !== void 0) patch.email = b.email ? String(b.email) : void 0;
+      if (b.phone !== void 0) patch.phone = b.phone ? String(b.phone) : void 0;
+      if (b.address !== void 0) patch.address = b.address ? String(b.address) : void 0;
+      if (b.city !== void 0) patch.city = b.city ? String(b.city) : void 0;
+      if (b.country !== void 0) patch.country = b.country ? String(b.country) : void 0;
+      if (b.taxId !== void 0) patch.taxId = b.taxId ? String(b.taxId) : void 0;
+      if (b.incoterm !== void 0) patch.incoterm = b.incoterm ? String(b.incoterm) : void 0;
+      if (b.notes !== void 0) patch.notes = b.notes ? String(b.notes) : void 0;
       const saved = await storage.updateClient(id, patch);
       res.json({ data: saved });
     } catch (e) {
@@ -1499,29 +1494,34 @@ async function registerRoutes(app) {
       res.status(404).json({ message: "Client not found" });
     }
   });
-  const contractBaseForPost = z2.object({
-    id: z2.string().optional(),
-    code: z2.string().optional(),
-    market: z2.enum(["LOCAL", "EXPORT"]),
-    contractDate: z2.string().optional(),
-    date: z2.string().optional(),
-    clientId: z2.string(),
-    clientName: z2.string().optional(),
-    productId: z2.string(),
-    productName: z2.string().optional(),
-    quantityTons: z2.number().positive().optional(),
-    quantityT: z2.number().positive().optional(),
-    priceCurrency: z2.enum(["USD", "TND"]).optional(),
-    priceUsd: z2.number().optional(),
-    priceTnd: z2.number().optional(),
-    fxRate: z2.number().positive().optional(),
-    startDate: z2.string(),
-    endDate: z2.string(),
-    notes: z2.string().optional(),
-    createdAt: z2.string().optional(),
-    updatedAt: z2.string().optional()
-  });
-  const contractBaseForPut = contractBaseForPost.partial();
+  const toStorageContractPayload = (b) => {
+    const market = b.market === "EXPORT" ? "EXPORT" : "LOCAL";
+    const contractDate = typeof b.contractDate === "string" && b.contractDate || typeof b.date === "string" && b.date || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    const startDate = typeof b.startDate === "string" && b.startDate || typeof b.dateStart === "string" && b.dateStart || contractDate;
+    const endDate = typeof b.endDate === "string" && b.endDate || typeof b.dateEnd === "string" && b.dateEnd || contractDate;
+    const quantityT = (b.quantityT != null ? Number(b.quantityT) : void 0) ?? (b.quantityTons != null ? Number(b.quantityTons) : void 0) ?? 0;
+    const priceCurrency = b.priceCurrency === "TND" ? "TND" : "USD";
+    const priceUsd = priceCurrency === "USD" ? b.priceUsd != null ? Number(b.priceUsd) : b.pricePerT != null ? Number(b.pricePerT) : void 0 : void 0;
+    const priceTnd = priceCurrency === "TND" ? b.priceTnd != null ? Number(b.priceTnd) : b.pricePerT != null ? Number(b.pricePerT) : void 0 : void 0;
+    const fxRate = b.fxRate != null ? Number(b.fxRate) : void 0;
+    return {
+      // compat avec storage.createContract (attend `date`, pas `contractDate`)
+      date: contractDate,
+      market,
+      clientId: String(b.clientId || ""),
+      clientName: b.clientName ? String(b.clientName) : void 0,
+      productId: String(b.productId || ""),
+      productName: b.productName ? String(b.productName) : void 0,
+      quantityT,
+      priceUsd,
+      priceTnd,
+      fxRate,
+      startDate,
+      endDate,
+      // on laisse `code` facultatif si fourni
+      code: typeof b.code === "string" ? b.code : void 0
+    };
+  };
   const registerContractRoutes = (base) => {
     app.get(`${base}`, async (_req, res) => {
       const rows = await storage.getAllContracts();
@@ -1529,8 +1529,16 @@ async function registerRoutes(app) {
     });
     app.post(`${base}`, async (req, res) => {
       try {
-        const basePayload = contractBaseForPost.parse(req.body);
-        const payload = insertContractSchema.parse(basePayload);
+        const b = req.body || {};
+        if (!b.clientId) return res.status(400).json({ message: "clientId is required" });
+        if (!b.productId) return res.status(400).json({ message: "productId is required" });
+        const payload = toStorageContractPayload(b);
+        if (!payload.quantityT || payload.quantityT <= 0) {
+          return res.status(400).json({ message: "quantityT must be > 0" });
+        }
+        if (payload.priceUsd == null && payload.priceTnd == null) {
+          return res.status(400).json({ message: "priceUsd or priceTnd is required" });
+        }
         const saved = await storage.createContract(payload);
         res.json({ data: saved });
       } catch (e) {
@@ -1540,12 +1548,12 @@ async function registerRoutes(app) {
     app.put(`${base}/:id`, async (req, res) => {
       try {
         const id = String(req.params.id);
-        const basePatch = contractBaseForPut.parse(req.body || {});
-        if (!Object.keys(basePatch).length) {
-          return res.status(400).json({ message: "Empty patch" });
-        }
-        const normalizedPatch = insertContractSchema.parse(basePatch);
-        const saved = await storage.updateContract(id, normalizedPatch);
+        const b = req.body || {};
+        const patch = toStorageContractPayload(b);
+        Object.keys(patch).forEach((k) => {
+          if (patch[k] === void 0) delete patch[k];
+        });
+        const saved = await storage.updateContract(id, patch);
         res.json({ data: saved });
       } catch (e) {
         res.status(400).json({ message: e?.message || "Failed to update contract" });

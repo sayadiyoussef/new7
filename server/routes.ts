@@ -1,16 +1,15 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage.js";
-import { z } from "zod";
 import {
   loginSchema,
   insertChatMessageSchema,
   insertChatChannelSchema,
   insertProductSchema,
-  // Clients (schéma avec transform/superRefine)
-  insertClientSchema,
-  // Contrats (schéma avec transform/superRefine)
-  insertContractSchema,
+  // On NE dépend plus d'insertClientSchema / insertContractSchema pour la validation
+  // afin d'éviter les .extend() sur un ZodEffects.
+  // insertClientSchema,
+  // insertContractSchema,
 } from "@shared/schema";
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -369,36 +368,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   /* ----------------- Clients API ----------------- */
-  // schémas utilitaires "purs objets" (pas d'effets) pour POST/PUT
-  const clientBaseForPost = z.object({
-    id: z.string().optional(),
-    market: z.enum(["LOCAL","EXPORT"]).optional(), // défaut géré dans le shared
-    name: z.string(),
-    paymentTerms: z.string().optional(),
-    terms: z.string().optional(),
-    contactName: z.string().optional(),
-    email: z.string().email().optional(),
-    phone: z.string().optional(),
-    address: z.string().optional(),
-    city: z.string().optional(),
-    country: z.string().optional(),
-    taxId: z.string().optional(),
-    incoterm: z.string().optional(),
-    notes: z.string().optional(),
-    createdAt: z.string().optional(),
-    updatedAt: z.string().optional(),
-  });
-  const clientBaseForPut = clientBaseForPost.partial();
-
   app.get("/api/clients", async (_req, res) => {
     const rows = await storage.getAllClients();
     res.json({ data: rows });
   });
 
+  // Normalisation manuelle: accepte { terms } ou { paymentTerms } et mappe vers storage (terms)
   app.post("/api/clients", async (req, res) => {
     try {
-      const base = clientBaseForPost.parse(req.body);
-      const payload = insertClientSchema.parse(base); // normalise paymentTerms/terms
+      const b = req.body || {};
+      const market = b.market === "EXPORT" ? "EXPORT" : "LOCAL";
+      const name = String(b.name ?? "").trim();
+      const terms = String(b.terms ?? b.paymentTerms ?? "").trim();
+
+      if (!name) return res.status(400).json({ message: "name is required" });
+      if (!terms) return res.status(400).json({ message: "terms/paymentTerms is required" });
+
+      const payload = {
+        market,
+        name,
+        terms,
+        contactName: b.contactName ? String(b.contactName) : undefined,
+        email: b.email ? String(b.email) : undefined,
+        phone: b.phone ? String(b.phone) : undefined,
+        address: b.address ? String(b.address) : undefined,
+        city: b.city ? String(b.city) : undefined,
+        country: b.country ? String(b.country) : undefined,
+        taxId: b.taxId ? String(b.taxId) : undefined,
+        incoterm: b.incoterm ? String(b.incoterm) : undefined,
+        notes: b.notes ? String(b.notes) : undefined,
+      };
       const saved = await storage.createClient(payload as any);
       res.json({ data: saved });
     } catch (e: any) {
@@ -409,8 +408,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/clients/:id", async (req, res) => {
     try {
       const id = String(req.params.id);
-      const basePatch = clientBaseForPut.parse(req.body || {});
-      const patch = insertClientSchema.parse(basePatch); // applique la normalisation
+      const b = req.body || {};
+
+      const patch: any = {};
+      if (b.name !== undefined) patch.name = String(b.name).trim();
+      if (b.market !== undefined) patch.market = b.market === "EXPORT" ? "EXPORT" : "LOCAL";
+      // normalise terms
+      if (b.terms !== undefined || b.paymentTerms !== undefined) {
+        const v = String(b.terms ?? b.paymentTerms ?? "").trim();
+        if (!v) return res.status(400).json({ message: "terms/paymentTerms cannot be empty" });
+        patch.terms = v;
+      }
+      if (b.contactName !== undefined) patch.contactName = b.contactName ? String(b.contactName) : undefined;
+      if (b.email !== undefined) patch.email = b.email ? String(b.email) : undefined;
+      if (b.phone !== undefined) patch.phone = b.phone ? String(b.phone) : undefined;
+      if (b.address !== undefined) patch.address = b.address ? String(b.address) : undefined;
+      if (b.city !== undefined) patch.city = b.city ? String(b.city) : undefined;
+      if (b.country !== undefined) patch.country = b.country ? String(b.country) : undefined;
+      if (b.taxId !== undefined) patch.taxId = b.taxId ? String(b.taxId) : undefined;
+      if (b.incoterm !== undefined) patch.incoterm = b.incoterm ? String(b.incoterm) : undefined;
+      if (b.notes !== undefined) patch.notes = b.notes ? String(b.notes) : undefined;
+
       const saved = await storage.updateClient(id, patch as any);
       res.json({ data: saved });
     } catch (e: any) {
@@ -429,31 +447,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   /* ----------------- Contrats API ----------------- */
-  // schémas utilitaires "purs objets" (pas d'effets) pour POST/PUT
-  const contractBaseForPost = z.object({
-    id: z.string().optional(),
-    code: z.string().optional(),
-    market: z.enum(["LOCAL","EXPORT"]),
-    contractDate: z.string().optional(),
-    date: z.string().optional(),
-    clientId: z.string(),
-    clientName: z.string().optional(),
-    productId: z.string(),
-    productName: z.string().optional(),
-    quantityTons: z.number().positive().optional(),
-    quantityT: z.number().positive().optional(),
-    priceCurrency: z.enum(["USD","TND"]).optional(),
-    priceUsd: z.number().optional(),
-    priceTnd: z.number().optional(),
-    fxRate: z.number().positive().optional(),
-    startDate: z.string(),
-    endDate: z.string(),
-    notes: z.string().optional(),
-    createdAt: z.string().optional(),
-    updatedAt: z.string().optional(),
-  });
-  const contractBaseForPut = contractBaseForPost.partial();
+  // Helper de normalisation: accepte vieux/nouveaux noms et mappe vers le storage
+  const toStorageContractPayload = (b: any) => {
+    const market = b.market === "EXPORT" ? "EXPORT" : "LOCAL";
 
+    const contractDate: string =
+      (typeof b.contractDate === "string" && b.contractDate) ||
+      (typeof b.date === "string" && b.date) ||
+      new Date().toISOString().slice(0, 10);
+
+    const startDate: string =
+      (typeof b.startDate === "string" && b.startDate) ||
+      (typeof b.dateStart === "string" && b.dateStart) ||
+      contractDate;
+
+    const endDate: string =
+      (typeof b.endDate === "string" && b.endDate) ||
+      (typeof b.dateEnd === "string" && b.dateEnd) ||
+      contractDate;
+
+    const quantityT =
+      (b.quantityT != null ? Number(b.quantityT) : undefined) ??
+      (b.quantityTons != null ? Number(b.quantityTons) : undefined) ??
+      0;
+
+    const priceCurrency: "USD" | "TND" =
+      b.priceCurrency === "TND" ? "TND" : "USD";
+
+    const priceUsd =
+      priceCurrency === "USD"
+        ? (b.priceUsd != null ? Number(b.priceUsd) : (b.pricePerT != null ? Number(b.pricePerT) : undefined))
+        : undefined;
+
+    const priceTnd =
+      priceCurrency === "TND"
+        ? (b.priceTnd != null ? Number(b.priceTnd) : (b.pricePerT != null ? Number(b.pricePerT) : undefined))
+        : undefined;
+
+    const fxRate = b.fxRate != null ? Number(b.fxRate) : undefined;
+
+    return {
+      // compat avec storage.createContract (attend `date`, pas `contractDate`)
+      date: contractDate,
+      market,
+      clientId: String(b.clientId || ""),
+      clientName: b.clientName ? String(b.clientName) : undefined,
+      productId: String(b.productId || ""),
+      productName: b.productName ? String(b.productName) : undefined,
+      quantityT,
+      priceUsd,
+      priceTnd,
+      fxRate,
+      startDate,
+      endDate,
+      // on laisse `code` facultatif si fourni
+      code: typeof b.code === "string" ? b.code : undefined,
+    };
+  };
+
+  // helper to register same handlers on multiple base paths
   const registerContractRoutes = (base: string) => {
     app.get(`${base}`, async (_req, res) => {
       const rows = await storage.getAllContracts();
@@ -462,8 +514,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     app.post(`${base}`, async (req, res) => {
       try {
-        const basePayload = contractBaseForPost.parse(req.body);
-        const payload = insertContractSchema.parse(basePayload); // normalise & valide
+        const b = req.body || {};
+        // validations minimales
+        if (!b.clientId) return res.status(400).json({ message: "clientId is required" });
+        if (!b.productId) return res.status(400).json({ message: "productId is required" });
+
+        const payload = toStorageContractPayload(b);
+        if (!payload.quantityT || payload.quantityT <= 0) {
+          return res.status(400).json({ message: "quantityT must be > 0" });
+        }
+        if (payload.priceUsd == null && payload.priceTnd == null) {
+          return res.status(400).json({ message: "priceUsd or priceTnd is required" });
+        }
+
         const saved = await storage.createContract(payload as any);
         res.json({ data: saved });
       } catch (e: any) {
@@ -474,13 +537,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     app.put(`${base}/:id`, async (req, res) => {
       try {
         const id = String(req.params.id);
-        const basePatch = contractBaseForPut.parse(req.body || {});
-        if (!Object.keys(basePatch).length) {
-          return res.status(400).json({ message: "Empty patch" });
-        }
-        // on repasse par le schéma à effets pour normaliser les champs fournis
-        const normalizedPatch = insertContractSchema.parse(basePatch);
-        const saved = await storage.updateContract(id, normalizedPatch as any);
+        const b = req.body || {};
+        const patch = toStorageContractPayload(b);
+
+        // PATCH: on enlève les champs non fournis pour ne pas écraser
+        Object.keys(patch).forEach(k => {
+          if (patch[k as keyof typeof patch] === undefined) delete (patch as any)[k];
+        });
+
+        const saved = await storage.updateContract(id, patch as any);
         res.json({ data: saved });
       } catch (e: any) {
         res.status(400).json({ message: e?.message || "Failed to update contract" });
@@ -498,7 +563,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   };
 
-  // chemins principaux + alias
+  // Primary path + alias FR + singulier
   registerContractRoutes("/api/contracts");
   registerContractRoutes("/api/contrats");
   registerContractRoutes("/api/contract");
