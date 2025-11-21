@@ -66,11 +66,15 @@ var init_storage = __esm({
       chatChannels = /* @__PURE__ */ new Map();
       forwardPrices = /* @__PURE__ */ new Map();
       forwardCurves = /* @__PURE__ */ new Map();
-      // --------- Produits ----------
+      // Produits
       products = /* @__PURE__ */ new Map();
-      // --------- ✅ Clients ----------
+      // Clients
       clients = /* @__PURE__ */ new Map();
-      /** ✅ codes courts adaptés aux nouveaux noms */
+      // Contrats
+      contracts = /* @__PURE__ */ new Map();
+      /** Compteurs par (market-year) pour le code auto */
+      contractCounters = /* @__PURE__ */ new Map();
+      /** codes courts adaptés aux nouveaux noms */
       codeFromGradeName(name) {
         const map = {
           "RBD PO": "RBDPO",
@@ -80,7 +84,7 @@ var init_storage = __esm({
           "RBD PKO": "PKO",
           "RBD CNO": "CNO",
           "RBD PKS": "PKS",
-          "CDSBO": "CDSBO"
+          CDSBO: "CDSBO"
         };
         return map[name] ?? name.toUpperCase().replace(/\s+/g, "_");
       }
@@ -92,9 +96,25 @@ var init_storage = __esm({
         const n = Number(cleaned);
         return Number.isFinite(n) ? n : 0;
       }
+      /** Génère un code contrat du type LOCAL2025001 / EXPORT2025002 */
+      nextContractCode(market, dateStr) {
+        const year = new Date(dateStr).getFullYear();
+        const key = `${market}-${year}`;
+        const current = this.contractCounters.get(key) ?? 0;
+        const next = current + 1;
+        this.contractCounters.set(key, next);
+        const seq = String(next).padStart(3, "0");
+        return `${market}${year}${seq}`;
+      }
       constructor() {
         const seedUsers = [
-          { id: "1", name: "Youssef SAYADI", email: "y.sayadi@direct-medical.net", password: "admin123", role: "admin" },
+          {
+            id: "1",
+            name: "Youssef SAYADI",
+            email: "y.sayadi@direct-medical.net",
+            password: "admin123",
+            role: "admin"
+          },
           { id: "2", name: "Senior Buyer", email: "senior@oiltracker.com", password: "senior123", role: "senior" },
           { id: "3", name: "Junior Buyer", email: "junior@oiltracker.com", password: "junior123", role: "junior" },
           { id: "4", name: "Viewer", email: "viewer@oiltracker.com", password: "viewer123", role: "viewer" }
@@ -202,14 +222,14 @@ var init_storage = __esm({
         seed("ALBA 304-3", { "RBD POL IV64": "101,50%" });
         seed("CBS PREMIUM", { "RBD PKS": "101,50%" });
         seed("IRIS-204", { "RBD POL IV56": "101,50%" });
-        seed("HVSJ", { "CDSBO": "105%" });
-        const seedClient = (market, name, paymentTerms) => {
+        seed("HVSJ", { CDSBO: "105%" });
+        const seedClient = (market, name, terms) => {
           const id = randomUUID();
           this.clients.set(id, {
             id,
             market,
             name,
-            paymentTerms,
+            terms,
             updatedAt: (/* @__PURE__ */ new Date()).toISOString()
           });
         };
@@ -228,7 +248,13 @@ var init_storage = __esm({
       }
       async createUser(user) {
         const id = randomUUID();
-        const u = { id, name: user.name, email: user.email, password: user.password, role: user.role ?? "viewer" };
+        const u = {
+          id,
+          name: user.name,
+          email: user.email,
+          password: user.password,
+          role: user.role ?? "viewer"
+        };
         this.users.set(id, u);
         return u;
       }
@@ -348,7 +374,9 @@ var init_storage = __esm({
       }
       // Chat
       async getAllChatMessages() {
-        return Array.from(this.chatMessages.values()).sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+        return Array.from(this.chatMessages.values()).sort(
+          (a, b) => a.timestamp.getTime() - b.timestamp.getTime()
+        );
       }
       async getChatMessagesByChannel(channelId) {
         return Array.from(this.chatMessages.values()).filter((m) => m.channelId === channelId).sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
@@ -357,19 +385,30 @@ var init_storage = __esm({
         const id = randomUUID();
         const anyGeneral = Array.from(this.chatChannels.values()).find((c) => c.name === "general");
         const channelId = data.channelId ?? anyGeneral?.id ?? Array.from(this.chatChannels.keys())[0];
-        const m = { id, sender: data.sender, message: data.message, userId: data.userId ?? null, timestamp: /* @__PURE__ */ new Date(), channelId };
+        const m = {
+          id,
+          sender: data.sender,
+          message: data.message,
+          userId: data.userId ?? null,
+          timestamp: /* @__PURE__ */ new Date(),
+          channelId
+        };
         this.chatMessages.set(id, m);
         return m;
       }
       // Fixings + Vessels + Knowledge
       async getAllFixings() {
-        return Array.from(this.fixings.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+        return Array.from(this.fixings.values()).sort(
+          (a, b) => String(b.date).localeCompare(String(a.date))
+        );
       }
       async getAllVessels() {
         return Array.from(this.vessels.values());
       }
       async getAllKnowledge() {
-        return Array.from(this.knowledge.values()).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+        return Array.from(this.knowledge.values()).sort(
+          (a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))
+        );
       }
       async createFixing(data) {
         const id = randomUUID();
@@ -406,7 +445,16 @@ var init_storage = __esm({
       }
       async createVessel(data) {
         const id = randomUUID();
-        const v = { id, name: data.name, type: data.type || "Tanker", dwt: Number(data.dwt || 0), status: data.status || "Unknown", eta: data.eta, origin: data.origin, destination: data.destination };
+        const v = {
+          id,
+          name: data.name,
+          type: data.type || "Tanker",
+          dwt: Number(data.dwt || 0),
+          status: data.status || "Unknown",
+          eta: data.eta,
+          origin: data.origin,
+          destination: data.destination
+        };
         this.vessels.set(id, v);
         return v;
       }
@@ -425,7 +473,14 @@ var init_storage = __esm({
       }
       async createKnowledge(data) {
         const id = randomUUID();
-        const k = { id, title: data.title || "Untitled", tags: data.tags || [], excerpt: data.excerpt || data.link || "", content: data.content || data.link || "", updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
+        const k = {
+          id,
+          title: data.title || "Untitled",
+          tags: data.tags || [],
+          excerpt: data.excerpt || data.link || "",
+          content: data.content || data.link || "",
+          updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        };
         this.knowledge.set(id, k);
         return k;
       }
@@ -463,7 +518,9 @@ var init_storage = __esm({
           ...existing,
           ..."name" in data ? { name: String(data.name) } : {},
           ..."reference" in data ? { reference: data.reference ?? null } : {},
-          ...data.composition ? { composition: data.composition.map((c) => ({ gradeName: String(c.gradeName), percent: Number(c.percent) || 0 })).filter((c) => c.percent !== 0) } : {},
+          ...data.composition ? {
+            composition: data.composition.map((c) => ({ gradeName: String(c.gradeName), percent: Number(c.percent) || 0 })).filter((c) => c.percent !== 0)
+          } : {},
           updatedAt: (/* @__PURE__ */ new Date()).toISOString()
         };
         this.products.set(id, next);
@@ -472,7 +529,7 @@ var init_storage = __esm({
       async deleteProduct(id) {
         this.products.delete(id);
       }
-      // ------------------- ✅ Clients -------------------
+      // ------------------- Clients -------------------
       async getAllClients() {
         return Array.from(this.clients.values()).sort((a, b) => a.name.localeCompare(b.name));
       }
@@ -482,7 +539,7 @@ var init_storage = __esm({
           id,
           name: data.name,
           market: data.market,
-          paymentTerms: data.paymentTerms,
+          terms: data.terms,
           updatedAt: (/* @__PURE__ */ new Date()).toISOString()
         };
         this.clients.set(id, c);
@@ -495,7 +552,7 @@ var init_storage = __esm({
           ...existing,
           ..."name" in data ? { name: String(data.name) } : {},
           ..."market" in data ? { market: data.market } : {},
-          ..."paymentTerms" in data ? { paymentTerms: String(data.paymentTerms) } : {},
+          ..."terms" in data ? { terms: String(data.terms) } : {},
           updatedAt: (/* @__PURE__ */ new Date()).toISOString()
         };
         this.clients.set(id, next);
@@ -503,6 +560,85 @@ var init_storage = __esm({
       }
       async deleteClient(id) {
         this.clients.delete(id);
+      }
+      // ------------------- Contrats -------------------
+      async getAllContracts() {
+        return Array.from(this.contracts.values()).sort(
+          (a, b) => String(b.contractDate).localeCompare(String(a.contractDate))
+        );
+      }
+      async createContract(data) {
+        const id = randomUUID();
+        const contractDate = data.contractDate ?? (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+        const market = data.market;
+        const code = data.code && data.code.trim().length ? data.code : this.nextContractCode(market, contractDate);
+        let clientName = data.clientName;
+        if (!clientName && data.clientId) {
+          const c2 = this.clients.get(data.clientId);
+          if (c2) clientName = c2.name;
+        }
+        let productName = data.productName;
+        if (!productName && data.productId) {
+          const p = this.products.get(data.productId);
+          if (p) productName = p.name;
+        }
+        const c = {
+          id,
+          code,
+          market,
+          contractDate,
+          clientId: data.clientId,
+          clientName: clientName || "\u2014",
+          productId: data.productId,
+          productName: productName || "\u2014",
+          quantityTons: Number(data.quantityTons),
+          priceCurrency: data.priceCurrency,
+          priceUsd: data.priceUsd !== void 0 ? Number(data.priceUsd) : void 0,
+          priceTnd: data.priceTnd !== void 0 ? Number(data.priceTnd) : void 0,
+          fxRate: Number(data.fxRate),
+          startDate: data.startDate,
+          endDate: data.endDate,
+          notes: data.notes,
+          createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+          updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        this.contracts.set(id, c);
+        return c;
+      }
+      async updateContract(id, data) {
+        const existing = this.contracts.get(id);
+        if (!existing) throw new Error("Contract not found");
+        let nextCode = existing.code;
+        let nextDate = existing.contractDate;
+        let nextMarket = existing.market;
+        if (data.contractDate) nextDate = data.contractDate;
+        if (data.market) nextMarket = data.market;
+        if (!data.code && (data.market || data.contractDate)) {
+          const yOld = new Date(existing.contractDate).getFullYear();
+          const yNew = new Date(nextDate).getFullYear();
+          if (existing.market !== nextMarket || yOld !== yNew) {
+            nextCode = this.nextContractCode(nextMarket, nextDate);
+          }
+        } else if (data.code) {
+          nextCode = data.code;
+        }
+        const next = {
+          ...existing,
+          ...data,
+          code: nextCode,
+          contractDate: nextDate,
+          market: nextMarket,
+          quantityTons: data.quantityTons !== void 0 ? Number(data.quantityTons) : existing.quantityTons,
+          priceUsd: data.priceUsd !== void 0 ? Number(data.priceUsd) : existing.priceUsd,
+          priceTnd: data.priceTnd !== void 0 ? Number(data.priceTnd) : existing.priceTnd,
+          fxRate: data.fxRate !== void 0 ? Number(data.fxRate) : existing.fxRate,
+          updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        this.contracts.set(id, next);
+        return next;
+      }
+      async deleteContract(id) {
+        this.contracts.delete(id);
       }
     };
     storage = new MemStorage();
@@ -764,6 +900,7 @@ import express2 from "express";
 // server/routes.ts
 init_storage();
 import { createServer } from "http";
+import { z as z2 } from "zod";
 
 // shared/schema.ts
 import { z } from "zod";
@@ -789,7 +926,6 @@ var insertOilGradeSchema = z.object({
   moisture: z.string().optional(),
   iv: z.string().optional(),
   dobi: z.string().optional(),
-  // on autorise freightUsd côté API (optionnel)
   freightUsd: z.number().optional()
 });
 var oilGradeSchema = insertOilGradeSchema.extend({ id: z.number() });
@@ -804,7 +940,7 @@ var insertMarketDataSchema = z.object({
   volume: z.string(),
   // "1234 MT"
   change24h: z.number()
-  // percentage +/- (en points)
+  // +/- en points
 });
 var marketDataSchema = insertMarketDataSchema.extend({ id: z.string() });
 var insertChatChannelSchema = z.object({
@@ -835,7 +971,7 @@ var loginSchema = z.object({
 });
 var productComponentSchema = z.object({
   gradeName: z.string(),
-  // doit correspondre au name du grade
+  // doit correspondre au "name" du grade
   percent: z.number()
   // ex: 70.5 (pas "70,5%")
 });
@@ -851,16 +987,45 @@ var productSchema = insertProductSchema.extend({
   updatedAt: z.string()
 });
 var marketEnum = z.enum(["LOCAL", "EXPORT"]);
-var insertClientSchema = z.object({
+var rawInsertClientSchema = z.object({
   id: z.string().optional(),
-  // Colonnes du tableau
   market: marketEnum.default("LOCAL"),
-  // "Marché"
   name: z.string().min(1),
-  // "Client"
+  // on accepte les deux, un seul requis
+  paymentTerms: z.string().min(1).optional(),
+  terms: z.string().min(1).optional(),
+  contactName: z.string().optional(),
+  email: z.string().email().optional(),
+  phone: z.string().optional(),
+  address: z.string().optional(),
+  city: z.string().optional(),
+  country: z.string().optional(),
+  taxId: z.string().optional(),
+  incoterm: z.string().optional(),
+  notes: z.string().optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional()
+}).superRefine((v, ctx) => {
+  if (!v.paymentTerms && !v.terms) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Modalit\xE9 requise (paymentTerms ou terms).",
+      path: ["paymentTerms"]
+    });
+  }
+}).transform((v) => ({
+  ...v,
+  paymentTerms: v.paymentTerms ?? v.terms,
+  // normalisation
+  terms: void 0
+  // on retire l’alias
+}));
+var insertClientSchema = rawInsertClientSchema;
+var clientSchema = z.object({
+  id: z.string(),
+  market: marketEnum.default("LOCAL"),
+  name: z.string().min(1),
   paymentTerms: z.string().min(1),
-  // "Modalité" (ex: "120 j", "A vue")
-  // Champs optionnels (extensibilité future, non utilisés obligatoirement)
   contactName: z.string().optional(),
   email: z.string().email().optional(),
   phone: z.string().optional(),
@@ -873,10 +1038,101 @@ var insertClientSchema = z.object({
   createdAt: z.string().optional(),
   updatedAt: z.string().optional()
 });
-var clientSchema = insertClientSchema.extend({
-  id: z.string(),
+var contractMarketEnum = z.enum(["LOCAL", "EXPORT"]);
+var priceCurrencyEnum = z.enum(["USD", "TND"]);
+var rawInsertContractSchema = z.object({
+  id: z.string().optional(),
+  // métadonnées
+  code: z.string().optional(),
+  market: contractMarketEnum,
+  // ancien: date / nouveau: contractDate
+  contractDate: z.string().optional(),
+  date: z.string().optional(),
+  // liaisons
+  clientId: z.string(),
+  clientName: z.string().optional(),
+  productId: z.string(),
+  productName: z.string().optional(),
+  // ancien: quantityT / nouveau: quantityTons
+  quantityTons: z.number().positive().optional(),
+  quantityT: z.number().positive().optional(),
+  // prix
+  priceCurrency: priceCurrencyEnum.optional(),
+  priceUsd: z.number().optional(),
+  priceTnd: z.number().optional(),
+  fxRate: z.number().positive().optional(),
+  // période
+  startDate: z.string(),
+  endDate: z.string(),
+  // divers
+  notes: z.string().optional(),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional()
+}).transform((v) => {
+  const contractDate = v.contractDate ?? v.date ?? (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+  const quantityTons = v.quantityTons ?? v.quantityT ?? 0;
+  const priceCurrency = v.priceCurrency ?? (v.priceUsd != null ? "USD" : "TND");
+  return {
+    ...v,
+    contractDate,
+    quantityTons,
+    priceCurrency
+  };
+}).superRefine((v, ctx) => {
+  if (v.priceCurrency === "USD" && v.priceUsd == null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "priceUsd est requis lorsque priceCurrency = USD",
+      path: ["priceUsd"]
+    });
+  }
+  if (v.priceCurrency === "TND" && v.priceTnd == null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "priceTnd est requis lorsque priceCurrency = TND",
+      path: ["priceTnd"]
+    });
+  }
+  if (!v.contractDate) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "contractDate est requis",
+      path: ["contractDate"]
+    });
+  }
+  if (!v.quantityTons || v.quantityTons <= 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "quantityTons doit \xEAtre > 0",
+      path: ["quantityTons"]
+    });
+  }
+});
+var insertContractSchema = rawInsertContractSchema;
+var contractSchema = z.object({
+  id: z.string(),
+  code: z.string(),
+  // métadonnées normalisées
+  market: contractMarketEnum,
+  contractDate: z.string(),
+  // liaisons
+  clientId: z.string(),
+  clientName: z.string().optional(),
+  productId: z.string(),
+  productName: z.string().optional(),
+  // commerce
+  quantityTons: z.number().positive(),
+  priceCurrency: priceCurrencyEnum,
+  priceUsd: z.number().optional(),
+  priceTnd: z.number().optional(),
+  fxRate: z.number().positive().optional(),
+  // période
+  startDate: z.string(),
+  endDate: z.string(),
+  // divers
+  notes: z.string().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string()
 });
 
 // server/routes.ts
@@ -1189,13 +1445,34 @@ async function registerRoutes(app) {
       res.status(404).json({ message: "Product not found" });
     }
   });
+  const clientBaseForPost = z2.object({
+    id: z2.string().optional(),
+    market: z2.enum(["LOCAL", "EXPORT"]).optional(),
+    // défaut géré dans le shared
+    name: z2.string(),
+    paymentTerms: z2.string().optional(),
+    terms: z2.string().optional(),
+    contactName: z2.string().optional(),
+    email: z2.string().email().optional(),
+    phone: z2.string().optional(),
+    address: z2.string().optional(),
+    city: z2.string().optional(),
+    country: z2.string().optional(),
+    taxId: z2.string().optional(),
+    incoterm: z2.string().optional(),
+    notes: z2.string().optional(),
+    createdAt: z2.string().optional(),
+    updatedAt: z2.string().optional()
+  });
+  const clientBaseForPut = clientBaseForPost.partial();
   app.get("/api/clients", async (_req, res) => {
     const rows = await storage.getAllClients();
     res.json({ data: rows });
   });
   app.post("/api/clients", async (req, res) => {
     try {
-      const payload = insertClientSchema.omit({ id: true }).parse(req.body);
+      const base = clientBaseForPost.parse(req.body);
+      const payload = insertClientSchema.parse(base);
       const saved = await storage.createClient(payload);
       res.json({ data: saved });
     } catch (e) {
@@ -1205,7 +1482,8 @@ async function registerRoutes(app) {
   app.put("/api/clients/:id", async (req, res) => {
     try {
       const id = String(req.params.id);
-      const patch = insertClientSchema.omit({ id: true }).partial().parse(req.body || {});
+      const basePatch = clientBaseForPut.parse(req.body || {});
+      const patch = insertClientSchema.parse(basePatch);
       const saved = await storage.updateClient(id, patch);
       res.json({ data: saved });
     } catch (e) {
@@ -1221,6 +1499,71 @@ async function registerRoutes(app) {
       res.status(404).json({ message: "Client not found" });
     }
   });
+  const contractBaseForPost = z2.object({
+    id: z2.string().optional(),
+    code: z2.string().optional(),
+    market: z2.enum(["LOCAL", "EXPORT"]),
+    contractDate: z2.string().optional(),
+    date: z2.string().optional(),
+    clientId: z2.string(),
+    clientName: z2.string().optional(),
+    productId: z2.string(),
+    productName: z2.string().optional(),
+    quantityTons: z2.number().positive().optional(),
+    quantityT: z2.number().positive().optional(),
+    priceCurrency: z2.enum(["USD", "TND"]).optional(),
+    priceUsd: z2.number().optional(),
+    priceTnd: z2.number().optional(),
+    fxRate: z2.number().positive().optional(),
+    startDate: z2.string(),
+    endDate: z2.string(),
+    notes: z2.string().optional(),
+    createdAt: z2.string().optional(),
+    updatedAt: z2.string().optional()
+  });
+  const contractBaseForPut = contractBaseForPost.partial();
+  const registerContractRoutes = (base) => {
+    app.get(`${base}`, async (_req, res) => {
+      const rows = await storage.getAllContracts();
+      res.json({ data: rows });
+    });
+    app.post(`${base}`, async (req, res) => {
+      try {
+        const basePayload = contractBaseForPost.parse(req.body);
+        const payload = insertContractSchema.parse(basePayload);
+        const saved = await storage.createContract(payload);
+        res.json({ data: saved });
+      } catch (e) {
+        res.status(400).json({ message: e?.message || "Invalid contract payload" });
+      }
+    });
+    app.put(`${base}/:id`, async (req, res) => {
+      try {
+        const id = String(req.params.id);
+        const basePatch = contractBaseForPut.parse(req.body || {});
+        if (!Object.keys(basePatch).length) {
+          return res.status(400).json({ message: "Empty patch" });
+        }
+        const normalizedPatch = insertContractSchema.parse(basePatch);
+        const saved = await storage.updateContract(id, normalizedPatch);
+        res.json({ data: saved });
+      } catch (e) {
+        res.status(400).json({ message: e?.message || "Failed to update contract" });
+      }
+    });
+    app.delete(`${base}/:id`, async (req, res) => {
+      try {
+        const id = String(req.params.id);
+        await storage.deleteContract(id);
+        res.json({ data: { id } });
+      } catch {
+        res.status(404).json({ message: "Contract not found" });
+      }
+    });
+  };
+  registerContractRoutes("/api/contracts");
+  registerContractRoutes("/api/contrats");
+  registerContractRoutes("/api/contract");
   app.all("/api/*", (_req, res) => {
     res.status(404).json({ message: "API route not found" });
   });

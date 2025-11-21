@@ -16,9 +16,10 @@ import Grades from "@/pages/grades";
 import Settings from "@/pages/settings";
 import NotFound from "@/pages/not-found";
 
-// ✅ NEW: pages Produits & Clients
+// ✅ NEW: pages Produits, Clients & Contrats
 import Products from "@/pages/products";
 import Clients from "@/pages/clients";
+import Contracts from "@/pages/contracts"; // ✅ nouveau module
 
 function Router() {
   const { isAuthenticated } = useAuth();
@@ -33,9 +34,10 @@ function Router() {
       <Route path="/analytics" component={Analytics} />
       <Route path="/fixings" component={Fixings} />
       <Route path="/navires" component={Navires} />
-      {/* ✅ NEW: routes produits & clients */}
+      {/* ✅ NEW: routes produits, clients & contrats */}
       <Route path="/products" component={Products} />
       <Route path="/clients" component={Clients} />
+      <Route path="/contracts" component={Contracts} /> {/* ✅ nouvelle route */}
       <Route path="/knowledge" component={Knowledge} />
       <Route path="/settings" component={Settings} />
       <Route component={NotFound} />

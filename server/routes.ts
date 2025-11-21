@@ -1,17 +1,20 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage.js";
+import { z } from "zod";
 import {
   loginSchema,
   insertChatMessageSchema,
   insertChatChannelSchema,
   insertProductSchema,
-  // ✅ Clients
+  // Clients (schéma avec transform/superRefine)
   insertClientSchema,
+  // Contrats (schéma avec transform/superRefine)
+  insertContractSchema,
 } from "@shared/schema";
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // ---------------- Auth ----------------
+  /* ---------------- Auth ---------------- */
   app.post("/api/auth/login", async (req, res) => {
     try {
       const { email, password } = loginSchema.parse(req.body);
@@ -31,7 +34,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // --------------- Oil Grades ---------------
+  /* --------------- Oil Grades --------------- */
   app.get("/api/grades", async (_req, res) => {
     const grades = await storage.getAllOilGrades();
     res.json({ data: grades });
@@ -149,7 +152,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // --------------- Market ---------------
+  /* --------------- Market --------------- */
   app.get("/api/market/latest", async (_req, res) => {
     const grades = await storage.getAllOilGrades();
     const all = await storage.getAllMarketData();
@@ -168,7 +171,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ data: items });
   });
 
-  // --------------- Analytics ---------------
+  /* --------------- Analytics --------------- */
   app.get("/api/analytics/buying-score/:id", async (req, res) => {
     const id = parseInt(req.params.id, 10);
     const items = (await storage.getMarketDataByGrade(id)).sort((a, b) => a.date.localeCompare(b.date));
@@ -207,7 +210,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ data: out });
   });
 
-  // --------------- Chat ---------------
+  /* --------------- Chat --------------- */
   app.get("/api/chat/channels", async (_req, res) => {
     const ch = await storage.getAllChatChannels();
     res.json({ data: ch });
@@ -241,7 +244,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // --------------- Fixings ---------------
+  /* --------------- Fixings --------------- */
   app.get("/api/fixings", async (_req, res) => {
     const rows = await storage.getAllFixings();
     res.json({ data: rows });
@@ -276,7 +279,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // --------------- Vessels ---------------
+  /* --------------- Vessels --------------- */
   app.get("/api/vessels", async (_req, res) => {
     const rows = await storage.getAllVessels();
     res.json({ data: rows });
@@ -309,7 +312,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // --------------- Knowledge & Intel ---------------
+  /* --------------- Knowledge & Intel --------------- */
   app.get("/api/knowledge", async (_req, res) => {
     const rows = await storage.getAllKnowledge();
     res.json({ data: rows });
@@ -328,7 +331,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ data: saved });
   });
 
-  // ----------------- NEW: Produits API -----------------
+  /* ----------------- Produits API ----------------- */
   app.get("/api/products", async (_req, res) => {
     const rows = await storage.getAllProducts();
     res.json({ data: rows });
@@ -365,7 +368,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // ----------------- ✅ Clients API -----------------
+  /* ----------------- Clients API ----------------- */
+  // schémas utilitaires "purs objets" (pas d'effets) pour POST/PUT
+  const clientBaseForPost = z.object({
+    id: z.string().optional(),
+    market: z.enum(["LOCAL","EXPORT"]).optional(), // défaut géré dans le shared
+    name: z.string(),
+    paymentTerms: z.string().optional(),
+    terms: z.string().optional(),
+    contactName: z.string().optional(),
+    email: z.string().email().optional(),
+    phone: z.string().optional(),
+    address: z.string().optional(),
+    city: z.string().optional(),
+    country: z.string().optional(),
+    taxId: z.string().optional(),
+    incoterm: z.string().optional(),
+    notes: z.string().optional(),
+    createdAt: z.string().optional(),
+    updatedAt: z.string().optional(),
+  });
+  const clientBaseForPut = clientBaseForPost.partial();
+
   app.get("/api/clients", async (_req, res) => {
     const rows = await storage.getAllClients();
     res.json({ data: rows });
@@ -373,9 +397,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/clients", async (req, res) => {
     try {
-      // ignore `id` if passed by mistake
-      const payload = insertClientSchema.omit({ id: true }).parse(req.body);
-      const saved = await storage.createClient(payload);
+      const base = clientBaseForPost.parse(req.body);
+      const payload = insertClientSchema.parse(base); // normalise paymentTerms/terms
+      const saved = await storage.createClient(payload as any);
       res.json({ data: saved });
     } catch (e: any) {
       res.status(400).json({ message: e?.message || "Invalid client payload" });
@@ -385,8 +409,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/clients/:id", async (req, res) => {
     try {
       const id = String(req.params.id);
-      // allow partial update; ignore id
-      const patch = insertClientSchema.omit({ id: true }).partial().parse(req.body || {});
+      const basePatch = clientBaseForPut.parse(req.body || {});
+      const patch = insertClientSchema.parse(basePatch); // applique la normalisation
       const saved = await storage.updateClient(id, patch as any);
       res.json({ data: saved });
     } catch (e: any) {
@@ -404,7 +428,82 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // --------------- 404 API ---------------
+  /* ----------------- Contrats API ----------------- */
+  // schémas utilitaires "purs objets" (pas d'effets) pour POST/PUT
+  const contractBaseForPost = z.object({
+    id: z.string().optional(),
+    code: z.string().optional(),
+    market: z.enum(["LOCAL","EXPORT"]),
+    contractDate: z.string().optional(),
+    date: z.string().optional(),
+    clientId: z.string(),
+    clientName: z.string().optional(),
+    productId: z.string(),
+    productName: z.string().optional(),
+    quantityTons: z.number().positive().optional(),
+    quantityT: z.number().positive().optional(),
+    priceCurrency: z.enum(["USD","TND"]).optional(),
+    priceUsd: z.number().optional(),
+    priceTnd: z.number().optional(),
+    fxRate: z.number().positive().optional(),
+    startDate: z.string(),
+    endDate: z.string(),
+    notes: z.string().optional(),
+    createdAt: z.string().optional(),
+    updatedAt: z.string().optional(),
+  });
+  const contractBaseForPut = contractBaseForPost.partial();
+
+  const registerContractRoutes = (base: string) => {
+    app.get(`${base}`, async (_req, res) => {
+      const rows = await storage.getAllContracts();
+      res.json({ data: rows });
+    });
+
+    app.post(`${base}`, async (req, res) => {
+      try {
+        const basePayload = contractBaseForPost.parse(req.body);
+        const payload = insertContractSchema.parse(basePayload); // normalise & valide
+        const saved = await storage.createContract(payload as any);
+        res.json({ data: saved });
+      } catch (e: any) {
+        res.status(400).json({ message: e?.message || "Invalid contract payload" });
+      }
+    });
+
+    app.put(`${base}/:id`, async (req, res) => {
+      try {
+        const id = String(req.params.id);
+        const basePatch = contractBaseForPut.parse(req.body || {});
+        if (!Object.keys(basePatch).length) {
+          return res.status(400).json({ message: "Empty patch" });
+        }
+        // on repasse par le schéma à effets pour normaliser les champs fournis
+        const normalizedPatch = insertContractSchema.parse(basePatch);
+        const saved = await storage.updateContract(id, normalizedPatch as any);
+        res.json({ data: saved });
+      } catch (e: any) {
+        res.status(400).json({ message: e?.message || "Failed to update contract" });
+      }
+    });
+
+    app.delete(`${base}/:id`, async (req, res) => {
+      try {
+        const id = String(req.params.id);
+        await storage.deleteContract(id);
+        res.json({ data: { id } });
+      } catch {
+        res.status(404).json({ message: "Contract not found" });
+      }
+    });
+  };
+
+  // chemins principaux + alias
+  registerContractRoutes("/api/contracts");
+  registerContractRoutes("/api/contrats");
+  registerContractRoutes("/api/contract");
+
+  /* --------------- 404 API --------------- */
   app.all("/api/*", (_req, res) => {
     res.status(404).json({ message: "API route not found" });
   });
