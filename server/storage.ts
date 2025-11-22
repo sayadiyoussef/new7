@@ -66,6 +66,27 @@ const FORWARDS: Record<string, ForwardPoint[]> = {
   ],
 };
 
+/* ======================
+   NAVIRES — nouveaux types
+   ====================== */
+type GradeAllocation = { gradeId?: number; gradeName: string; qty: number };
+type Vessel = {
+  id: string;
+  name: string;             // ex: "June shipment 25"
+  type?: string;            // "Tanker" (héritage)
+  dwt?: number;
+  status?: string;          // "Planned" | "Laden" | ...
+  eta?: string;             // YYYY-MM-DD
+  origin?: string;
+  destination?: string;
+
+  // nouveaux champs
+  tender?: string;          // "Tender 2025"
+  supplier?: string;        // "Wilmar"
+  quantityTotal?: number;   // capacité planifiée totale (MT)
+  gradeAllocations?: GradeAllocation[]; // plan par grade
+};
+
 export interface IStorage {
   // Channels
   getAllChatChannels(): Promise<ChatChannel[]>;
@@ -145,7 +166,7 @@ class MemStorage implements IStorage {
   private oilGrades = new Map<number, OilGrade>();
   private marketData = new Map<string, MarketData>();
   private fixings = new Map<string, any>();
-  private vessels = new Map<string, any>();
+  private vessels = new Map<string, Vessel>();
   private knowledge = new Map<string, any>();
 
   private chatMessages = new Map<string, ChatMessage>();
@@ -190,6 +211,96 @@ class MemStorage implements IStorage {
     const cleaned = v.replace(/\s+/g, "").replace("%", "").replace(",", ".");
     const n = Number(cleaned);
     return Number.isFinite(n) ? n : 0;
+  }
+
+  // --- helpers navires / fixings ---
+  private parseNumberLoose(v: any, def = 0) {
+    if (v == null) return def;
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string") {
+      const cleaned = v.replace(/[^\d.,-]/g, "").replace(",", ".");
+      const n = Number(cleaned);
+      return Number.isFinite(n) ? n : def;
+    }
+    return def;
+  }
+  private parseVolumeMT(v: any) {
+    // Accepte "5,000 MT", "5000", 5000…
+    return this.parseNumberLoose(v, 0);
+  }
+  private getVesselByName(name?: string | null): Vessel | undefined {
+    if (!name) return undefined;
+    const low = String(name).trim().toLowerCase();
+    for (const v of this.vessels.values()) {
+      if (String(v.name).trim().toLowerCase() === low) return v;
+    }
+    return undefined;
+  }
+  private computeVesselConsumption(vesselName: string, excludeFixingId?: string) {
+    const byGrade = new Map<string, number>();
+    let total = 0;
+    for (const f of this.fixings.values()) {
+      if (excludeFixingId && f.id === excludeFixingId) continue;
+      if (!f.vessel) continue;
+      if (String(f.vessel).trim().toLowerCase() !== vesselName.trim().toLowerCase()) continue;
+
+      const qty = this.parseVolumeMT(f.volume);
+      const gName = String(f.grade || "").trim();
+      if (!gName) continue;
+
+      byGrade.set(gName, (byGrade.get(gName) || 0) + qty);
+      total += qty;
+    }
+    return { byGrade, total };
+  }
+  private assertFixingFitsVesselPlan(params: {
+    vesselName?: string | null;
+    grade?: string | null;
+    volume?: any;
+    excludeFixingId?: string; // pour update
+  }) {
+    const v = this.getVesselByName(params.vesselName ?? "");
+    if (!v) return; // pas de plan => on n’impose rien
+
+    const plannedTotal = this.parseNumberLoose(v.quantityTotal, 0);
+    const allocations = (v.gradeAllocations ?? []).map(a => ({ ...a, gradeName: String(a.gradeName).trim() }));
+
+    // aucun plan défini => on ne bloque pas
+    if (!plannedTotal && allocations.length === 0) return;
+
+    const newQty = this.parseVolumeMT(params.volume);
+    const gradeName = String(params.grade || "").trim();
+
+    const { byGrade, total } = this.computeVesselConsumption(v.name, params.excludeFixingId);
+
+    // contrôle total
+    if (plannedTotal > 0 && total + newQty > plannedTotal + 1e-9) {
+      const remain = Math.max(0, plannedTotal - total);
+      const err: any = new Error(
+        `Plan capacity exceeded for vessel "${v.name}": total ${total + newQty} MT > planned ${plannedTotal} MT (remaining ${remain} MT).`
+      );
+      err.status = 409;
+      throw err;
+    }
+
+    // contrôle par grade (si défini)
+    const planForGrade = allocations.find(a => a.gradeName.toLowerCase() === gradeName.toLowerCase());
+    if (planForGrade) {
+      const used = byGrade.get(gradeName) || 0;
+      if (used + newQty > planForGrade.qty + 1e-9) {
+        const remain = Math.max(0, planForGrade.qty - used);
+        const err: any = new Error(
+          `Grade plan exceeded on "${v.name}" for ${gradeName}: ${used + newQty} MT > planned ${planForGrade.qty} MT (remaining ${remain} MT).`
+        );
+        err.status = 409;
+        throw err;
+      }
+    } else if (allocations.length > 0) {
+      const allowed = allocations.map(a => `${a.gradeName} (${a.qty} MT)`).join(", ");
+      const err: any = new Error(`Grade "${gradeName}" not planned on vessel "${v.name}". Allowed: ${allowed}`);
+      err.status = 409;
+      throw err;
+    }
   }
 
   /** Génère un code contrat du type LOCAL2025001 / EXPORT2025002 */
@@ -260,25 +371,38 @@ class MemStorage implements IStorage {
 
     // Seed fixings / vessels / knowledge
     [
-      { date: new Date().toISOString().slice(0, 10), route: "MAL → TUN", grade: "RBD PO", volume: "5,000 MT", priceUsd: 980, counterparty: "Wilmar", vessel: "June shipment 25" },
+      { date: new Date().toISOString().slice(0, 10), route: "MAL → TUN", grade: "RBD PO",  volume: "5,000 MT", priceUsd: 980,  counterparty: "Wilmar",    vessel: "June shipment 25" },
       { date: new Date(Date.now() - 86400000).toISOString().slice(0, 10), route: "IDN → TUN", grade: "RBD PKO", volume: "3,000 MT", priceUsd: 1210, counterparty: "Musim Mas", vessel: "August shipment 25" },
-      { date: new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10), route: "USA → TUN", grade: "CDSBO", volume: "8,000 MT", priceUsd: 890, counterparty: "Bunge", vessel: "January shipment 26" },
+      { date: new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10), route: "USA → TUN", grade: "CDSBO", volume: "8,000 MT", priceUsd: 890, counterparty: "Bunge",     vessel: "January shipment 26" },
     ].forEach((f) => {
       const id = randomUUID();
       this.fixings.set(id, { id, ...f });
     });
 
+    // Vessels avec nouveaux champs (rétro-compat OK si non utilisés)
     [
-      { name: "June shipment 25", type: "Tanker", dwt: 45000, status: "Laden", eta: "2025-09-02", origin: "Port Klang", destination: "Rades" },
-      { name: "August shipment 25", type: "Tanker", dwt: 38000, status: "Ballast", eta: "2025-08-28", origin: "Belawan", destination: "Rades" },
-      { name: "January shipment 26", type: "Tanker", dwt: 52000, status: "At anchor", eta: "2025-09-10", origin: "New Orleans", destination: "Rades" },
+      { name: "June shipment 25",    type: "Tanker", dwt: 45000, status: "Laden",    eta: "2025-09-02", origin: "Port Klang",  destination: "Rades",
+        tender: "Tender 2025", supplier: "Wilmar", quantityTotal: 4000,
+        gradeAllocations: [
+          { gradeName: "RBD PO", qty: 2000 }, { gradeName: "RBD POL IV56", qty: 1000 }, { gradeName: "RBD CNO", qty: 500 }, { gradeName: "RBD PKO", qty: 500 }
+        ] },
+      { name: "August shipment 25",  type: "Tanker", dwt: 38000, status: "Ballast",  eta: "2025-08-28", origin: "Belawan",     destination: "Rades",
+        tender: "Tender 2025", supplier: "Musim Mas", quantityTotal: 3000,
+        gradeAllocations: [
+          { gradeName: "RBD PO", qty: 1500 }, { gradeName: "RBD PKO", qty: 1500 }
+        ] },
+      { name: "January shipment 26", type: "Tanker", dwt: 52000, status: "At anchor", eta: "2025-09-10", origin: "New Orleans", destination: "Rades",
+        tender: "Tender 2026", supplier: "Bunge", quantityTotal: 8000,
+        gradeAllocations: [
+          { gradeName: "CDSBO", qty: 8000 }
+        ] },
     ].forEach((v) => {
       const id = randomUUID();
       this.vessels.set(id, { id, ...v });
     });
 
     [
-      { title: "Spec RBD PO", tags: ["spec", "quality"], excerpt: "FFA < 0.1%, Moisture < 0.1%, DOBI 2.4+", content: "Detailed spec for RBD PO used by DMA." },
+      { title: "Spec RBD PO",         tags: ["spec", "quality"], excerpt: "FFA < 0.1%, Moisture < 0.1%, DOBI 2.4+", content: "Detailed spec for RBD PO used by DMA." },
       { title: "Contract Template (CIF)", tags: ["contract", "legal"], excerpt: "Standard CIF template for palm products", content: "Clause set for CIF DMA imports." },
       { title: "Ops Checklist: Discharge Rades", tags: ["ops", "port"], excerpt: "Pre-arrival docs, draft survey, sampling", content: "Operational checklist for Rades discharge." },
     ].forEach((k) => {
@@ -296,7 +420,7 @@ class MemStorage implements IStorage {
     this.chatChannels.set(chOpsId, { id: chOpsId, name: "ops", createdAt: now });
 
     const seedChat: Omit<ChatMessage, "id" | "timestamp">[] = [
-      { sender: "System", message: "Welcome to OilTracker team chat", userId: null },
+      { sender: "System",       message: "Welcome to OilTracker team chat", userId: null },
       { sender: "Senior Buyer", message: "Palm oil prices rallied this week. Should we increase our position?", userId: "2" },
       { sender: "Youssef SAYADI", message: "Agreed. Let's align on risk and TND exposure tomorrow.", userId: "1" },
       { sender: "Junior Buyer", message: "I uploaded a basis spreadsheet from Malaysia.", userId: "3" },
@@ -560,7 +684,15 @@ class MemStorage implements IStorage {
       String(b.updatedAt).localeCompare(String(a.updatedAt))
     );
   }
+
   async createFixing(data: any) {
+    // vérifie le plan avant enregistrement
+    this.assertFixingFitsVesselPlan({
+      vesselName: data.vessel,
+      grade: data.grade,
+      volume: data.volume,
+    });
+
     const id = randomUUID();
     const f = {
       id,
@@ -582,28 +714,53 @@ class MemStorage implements IStorage {
   async updateFixing(id: string, data: any) {
     const existing = this.fixings.get(id);
     if (!existing) throw new Error("Fixing not found");
-    const updated = { ...existing, ...data, id };
-    this.fixings.set(id, updated);
-    if (updated.vessel && !Array.from(this.vessels.values()).some((v: any) => v.name === updated.vessel)) {
+
+    const next = { ...existing, ...data, id };
+
+    // re-contrôle avec exclusion de l’ID courant
+    this.assertFixingFitsVesselPlan({
+      vesselName: next.vessel,
+      grade: next.grade,
+      volume: next.volume,
+      excludeFixingId: id,
+    });
+
+    this.fixings.set(id, next);
+    if (next.vessel && !Array.from(this.vessels.values()).some((v: any) => v.name === next.vessel)) {
       const vId = randomUUID();
-      this.vessels.set(vId, { id: vId, name: updated.vessel, type: "Tanker", dwt: 0, status: "Unknown" });
+      this.vessels.set(vId, { id: vId, name: next.vessel, type: "Tanker", dwt: 0, status: "Unknown" });
     }
-    return updated;
+    return next;
   }
   async deleteFixing(id: string) {
     this.fixings.delete(id);
   }
+
   async createVessel(data: any) {
     const id = randomUUID();
-    const v = {
+    const v: Vessel = {
       id,
       name: data.name,
       type: data.type || "Tanker",
-      dwt: Number(data.dwt || 0),
-      status: data.status || "Unknown",
+      dwt: this.parseNumberLoose(data.dwt, 0),
+      status: data.status || "Planned",
       eta: data.eta,
       origin: data.origin,
       destination: data.destination,
+
+      // nouveaux champs (facultatifs)
+      tender: data.tender ?? undefined,
+      supplier: data.supplier ?? undefined,
+      quantityTotal: this.parseNumberLoose(data.quantityTotal, 0) || undefined,
+      gradeAllocations: Array.isArray(data.gradeAllocations)
+        ? data.gradeAllocations
+            .map((a:any)=>({
+              gradeId: a.gradeId ? Number(a.gradeId) : undefined,
+              gradeName: String(a.gradeName || "").trim(),
+              qty: this.parseNumberLoose(a.qty, 0),
+            }))
+            .filter((a:any)=> a.gradeName && a.qty > 0)
+        : undefined,
     };
     this.vessels.set(id, v);
     return v;
@@ -611,16 +768,35 @@ class MemStorage implements IStorage {
   async updateVessel(id: string, data: any) {
     const existing = this.vessels.get(id);
     if (!existing) throw new Error("Vessel not found");
-    const updated = { ...existing, ...data, id };
-    updated.dwt = Number(updated.dwt ?? existing.dwt ?? 0);
-    updated.type = updated.type || "Tanker";
-    updated.status = updated.status || "Unknown";
-    this.vessels.set(id, updated);
-    return updated;
+    const next: Vessel = {
+      ...existing,
+      ...data,
+      id,
+      dwt: this.parseNumberLoose(data.dwt, existing.dwt ?? 0),
+      type: data.type || existing.type || "Tanker",
+      status: data.status || existing.status || "Unknown",
+
+      // normalisation nouveaux champs
+      quantityTotal: (data.quantityTotal !== undefined)
+        ? (this.parseNumberLoose(data.quantityTotal, 0) || undefined)
+        : existing.quantityTotal,
+      gradeAllocations: Array.isArray(data.gradeAllocations)
+        ? data.gradeAllocations
+            .map((a:any)=>({
+              gradeId: a.gradeId ? Number(a.gradeId) : undefined,
+              gradeName: String(a.gradeName || "").trim(),
+              qty: this.parseNumberLoose(a.qty, 0),
+            }))
+            .filter((a:any)=> a.gradeName && a.qty > 0)
+        : existing.gradeAllocations,
+    };
+    this.vessels.set(id, next);
+    return next;
   }
   async deleteVessel(id: string) {
     this.vessels.delete(id);
   }
+
   async createKnowledge(data: any) {
     const id = randomUUID();
     const k = {

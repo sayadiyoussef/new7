@@ -96,6 +96,78 @@ var init_storage = __esm({
         const n = Number(cleaned);
         return Number.isFinite(n) ? n : 0;
       }
+      // --- helpers navires / fixings ---
+      parseNumberLoose(v, def = 0) {
+        if (v == null) return def;
+        if (typeof v === "number" && Number.isFinite(v)) return v;
+        if (typeof v === "string") {
+          const cleaned = v.replace(/[^\d.,-]/g, "").replace(",", ".");
+          const n = Number(cleaned);
+          return Number.isFinite(n) ? n : def;
+        }
+        return def;
+      }
+      parseVolumeMT(v) {
+        return this.parseNumberLoose(v, 0);
+      }
+      getVesselByName(name) {
+        if (!name) return void 0;
+        const low = String(name).trim().toLowerCase();
+        for (const v of this.vessels.values()) {
+          if (String(v.name).trim().toLowerCase() === low) return v;
+        }
+        return void 0;
+      }
+      computeVesselConsumption(vesselName, excludeFixingId) {
+        const byGrade = /* @__PURE__ */ new Map();
+        let total = 0;
+        for (const f of this.fixings.values()) {
+          if (excludeFixingId && f.id === excludeFixingId) continue;
+          if (!f.vessel) continue;
+          if (String(f.vessel).trim().toLowerCase() !== vesselName.trim().toLowerCase()) continue;
+          const qty = this.parseVolumeMT(f.volume);
+          const gName = String(f.grade || "").trim();
+          if (!gName) continue;
+          byGrade.set(gName, (byGrade.get(gName) || 0) + qty);
+          total += qty;
+        }
+        return { byGrade, total };
+      }
+      assertFixingFitsVesselPlan(params) {
+        const v = this.getVesselByName(params.vesselName ?? "");
+        if (!v) return;
+        const plannedTotal = this.parseNumberLoose(v.quantityTotal, 0);
+        const allocations = (v.gradeAllocations ?? []).map((a) => ({ ...a, gradeName: String(a.gradeName).trim() }));
+        if (!plannedTotal && allocations.length === 0) return;
+        const newQty = this.parseVolumeMT(params.volume);
+        const gradeName = String(params.grade || "").trim();
+        const { byGrade, total } = this.computeVesselConsumption(v.name, params.excludeFixingId);
+        if (plannedTotal > 0 && total + newQty > plannedTotal + 1e-9) {
+          const remain = Math.max(0, plannedTotal - total);
+          const err = new Error(
+            `Plan capacity exceeded for vessel "${v.name}": total ${total + newQty} MT > planned ${plannedTotal} MT (remaining ${remain} MT).`
+          );
+          err.status = 409;
+          throw err;
+        }
+        const planForGrade = allocations.find((a) => a.gradeName.toLowerCase() === gradeName.toLowerCase());
+        if (planForGrade) {
+          const used = byGrade.get(gradeName) || 0;
+          if (used + newQty > planForGrade.qty + 1e-9) {
+            const remain = Math.max(0, planForGrade.qty - used);
+            const err = new Error(
+              `Grade plan exceeded on "${v.name}" for ${gradeName}: ${used + newQty} MT > planned ${planForGrade.qty} MT (remaining ${remain} MT).`
+            );
+            err.status = 409;
+            throw err;
+          }
+        } else if (allocations.length > 0) {
+          const allowed = allocations.map((a) => `${a.gradeName} (${a.qty} MT)`).join(", ");
+          const err = new Error(`Grade "${gradeName}" not planned on vessel "${v.name}". Allowed: ${allowed}`);
+          err.status = 409;
+          throw err;
+        }
+      }
       /** Génère un code contrat du type LOCAL2025001 / EXPORT2025002 */
       nextContractCode(market, dateStr) {
         const year = new Date(dateStr).getFullYear();
@@ -164,9 +236,55 @@ var init_storage = __esm({
           this.fixings.set(id, { id, ...f });
         });
         [
-          { name: "June shipment 25", type: "Tanker", dwt: 45e3, status: "Laden", eta: "2025-09-02", origin: "Port Klang", destination: "Rades" },
-          { name: "August shipment 25", type: "Tanker", dwt: 38e3, status: "Ballast", eta: "2025-08-28", origin: "Belawan", destination: "Rades" },
-          { name: "January shipment 26", type: "Tanker", dwt: 52e3, status: "At anchor", eta: "2025-09-10", origin: "New Orleans", destination: "Rades" }
+          {
+            name: "June shipment 25",
+            type: "Tanker",
+            dwt: 45e3,
+            status: "Laden",
+            eta: "2025-09-02",
+            origin: "Port Klang",
+            destination: "Rades",
+            tender: "Tender 2025",
+            supplier: "Wilmar",
+            quantityTotal: 4e3,
+            gradeAllocations: [
+              { gradeName: "RBD PO", qty: 2e3 },
+              { gradeName: "RBD POL IV56", qty: 1e3 },
+              { gradeName: "RBD CNO", qty: 500 },
+              { gradeName: "RBD PKO", qty: 500 }
+            ]
+          },
+          {
+            name: "August shipment 25",
+            type: "Tanker",
+            dwt: 38e3,
+            status: "Ballast",
+            eta: "2025-08-28",
+            origin: "Belawan",
+            destination: "Rades",
+            tender: "Tender 2025",
+            supplier: "Musim Mas",
+            quantityTotal: 3e3,
+            gradeAllocations: [
+              { gradeName: "RBD PO", qty: 1500 },
+              { gradeName: "RBD PKO", qty: 1500 }
+            ]
+          },
+          {
+            name: "January shipment 26",
+            type: "Tanker",
+            dwt: 52e3,
+            status: "At anchor",
+            eta: "2025-09-10",
+            origin: "New Orleans",
+            destination: "Rades",
+            tender: "Tender 2026",
+            supplier: "Bunge",
+            quantityTotal: 8e3,
+            gradeAllocations: [
+              { gradeName: "CDSBO", qty: 8e3 }
+            ]
+          }
         ].forEach((v) => {
           const id = randomUUID();
           this.vessels.set(id, { id, ...v });
@@ -411,6 +529,11 @@ var init_storage = __esm({
         );
       }
       async createFixing(data) {
+        this.assertFixingFitsVesselPlan({
+          vesselName: data.vessel,
+          grade: data.grade,
+          volume: data.volume
+        });
         const id = randomUUID();
         const f = {
           id,
@@ -432,13 +555,19 @@ var init_storage = __esm({
       async updateFixing(id, data) {
         const existing = this.fixings.get(id);
         if (!existing) throw new Error("Fixing not found");
-        const updated = { ...existing, ...data, id };
-        this.fixings.set(id, updated);
-        if (updated.vessel && !Array.from(this.vessels.values()).some((v) => v.name === updated.vessel)) {
+        const next = { ...existing, ...data, id };
+        this.assertFixingFitsVesselPlan({
+          vesselName: next.vessel,
+          grade: next.grade,
+          volume: next.volume,
+          excludeFixingId: id
+        });
+        this.fixings.set(id, next);
+        if (next.vessel && !Array.from(this.vessels.values()).some((v) => v.name === next.vessel)) {
           const vId = randomUUID();
-          this.vessels.set(vId, { id: vId, name: updated.vessel, type: "Tanker", dwt: 0, status: "Unknown" });
+          this.vessels.set(vId, { id: vId, name: next.vessel, type: "Tanker", dwt: 0, status: "Unknown" });
         }
-        return updated;
+        return next;
       }
       async deleteFixing(id) {
         this.fixings.delete(id);
@@ -449,11 +578,20 @@ var init_storage = __esm({
           id,
           name: data.name,
           type: data.type || "Tanker",
-          dwt: Number(data.dwt || 0),
-          status: data.status || "Unknown",
+          dwt: this.parseNumberLoose(data.dwt, 0),
+          status: data.status || "Planned",
           eta: data.eta,
           origin: data.origin,
-          destination: data.destination
+          destination: data.destination,
+          // nouveaux champs (facultatifs)
+          tender: data.tender ?? void 0,
+          supplier: data.supplier ?? void 0,
+          quantityTotal: this.parseNumberLoose(data.quantityTotal, 0) || void 0,
+          gradeAllocations: Array.isArray(data.gradeAllocations) ? data.gradeAllocations.map((a) => ({
+            gradeId: a.gradeId ? Number(a.gradeId) : void 0,
+            gradeName: String(a.gradeName || "").trim(),
+            qty: this.parseNumberLoose(a.qty, 0)
+          })).filter((a) => a.gradeName && a.qty > 0) : void 0
         };
         this.vessels.set(id, v);
         return v;
@@ -461,12 +599,23 @@ var init_storage = __esm({
       async updateVessel(id, data) {
         const existing = this.vessels.get(id);
         if (!existing) throw new Error("Vessel not found");
-        const updated = { ...existing, ...data, id };
-        updated.dwt = Number(updated.dwt ?? existing.dwt ?? 0);
-        updated.type = updated.type || "Tanker";
-        updated.status = updated.status || "Unknown";
-        this.vessels.set(id, updated);
-        return updated;
+        const next = {
+          ...existing,
+          ...data,
+          id,
+          dwt: this.parseNumberLoose(data.dwt, existing.dwt ?? 0),
+          type: data.type || existing.type || "Tanker",
+          status: data.status || existing.status || "Unknown",
+          // normalisation nouveaux champs
+          quantityTotal: data.quantityTotal !== void 0 ? this.parseNumberLoose(data.quantityTotal, 0) || void 0 : existing.quantityTotal,
+          gradeAllocations: Array.isArray(data.gradeAllocations) ? data.gradeAllocations.map((a) => ({
+            gradeId: a.gradeId ? Number(a.gradeId) : void 0,
+            gradeName: String(a.gradeName || "").trim(),
+            qty: this.parseNumberLoose(a.qty, 0)
+          })).filter((a) => a.gradeName && a.qty > 0) : existing.gradeAllocations
+        };
+        this.vessels.set(id, next);
+        return next;
       }
       async deleteVessel(id) {
         this.vessels.delete(id);
@@ -1356,12 +1505,26 @@ async function registerRoutes(app) {
     res.json({ data: rows });
   });
   app.post("/api/vessels", async (req, res) => {
-    const b = req.body || {};
-    if (!b.name || !b.type || !b.dwt || !b.status) {
-      return res.status(400).json({ message: "Missing required fields" });
+    try {
+      const b = req.body || {};
+      const name = String(b.name ?? "").trim();
+      if (!name) return res.status(400).json({ message: "name is required" });
+      const payload = {
+        name,
+        type: b.type ?? "Tanker",
+        dwt: b.dwt ?? 0,
+        // laissé à 0 si vide
+        status: b.status ?? "Planned",
+        eta: b.eta ?? void 0,
+        origin: b.origin ?? void 0,
+        destination: b.destination ?? void 0
+        // si tu ajoutes de nouveaux champs plus tard, ils ne bloqueront pas
+      };
+      const saved = await storage.createVessel(payload);
+      res.json({ data: saved });
+    } catch (e) {
+      res.status(400).json({ message: e?.message || "Failed to create vessel" });
     }
-    const saved = await storage.createVessel(b);
-    res.json({ data: saved });
   });
   app.put("/api/vessels/:id", async (req, res) => {
     try {
@@ -1499,26 +1662,28 @@ async function registerRoutes(app) {
     const contractDate = typeof b.contractDate === "string" && b.contractDate || typeof b.date === "string" && b.date || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
     const startDate = typeof b.startDate === "string" && b.startDate || typeof b.dateStart === "string" && b.dateStart || contractDate;
     const endDate = typeof b.endDate === "string" && b.endDate || typeof b.dateEnd === "string" && b.dateEnd || contractDate;
-    const quantityT = (b.quantityT != null ? Number(b.quantityT) : void 0) ?? (b.quantityTons != null ? Number(b.quantityTons) : void 0) ?? 0;
-    const priceCurrency = b.priceCurrency === "TND" ? "TND" : "USD";
-    const priceUsd = priceCurrency === "USD" ? b.priceUsd != null ? Number(b.priceUsd) : b.pricePerT != null ? Number(b.pricePerT) : void 0 : void 0;
-    const priceTnd = priceCurrency === "TND" ? b.priceTnd != null ? Number(b.priceTnd) : b.pricePerT != null ? Number(b.pricePerT) : void 0 : void 0;
+    const quantityTons = (b.quantityT != null ? Number(b.quantityT) : void 0) ?? (b.quantityTons != null ? Number(b.quantityTons) : void 0) ?? 0;
+    const inferredCurrency = b.priceCurrency === "TND" ? "TND" : "USD";
+    const priceCurrency = b.priceCurrency ?? (b.priceUsd != null ? "USD" : b.priceTnd != null ? "TND" : inferredCurrency);
+    const pricePerT = b.pricePerT != null ? Number(b.pricePerT) : void 0;
+    const priceUsd = priceCurrency === "USD" ? b.priceUsd != null ? Number(b.priceUsd) : pricePerT : void 0;
+    const priceTnd = priceCurrency === "TND" ? b.priceTnd != null ? Number(b.priceTnd) : pricePerT : void 0;
     const fxRate = b.fxRate != null ? Number(b.fxRate) : void 0;
     return {
-      // compat avec storage.createContract (attend `date`, pas `contractDate`)
-      date: contractDate,
+      // >>>>> IMPORTANT: le storage attend `contractDate` et `quantityTons`
+      contractDate,
       market,
       clientId: String(b.clientId || ""),
       clientName: b.clientName ? String(b.clientName) : void 0,
       productId: String(b.productId || ""),
       productName: b.productName ? String(b.productName) : void 0,
-      quantityT,
+      quantityTons,
+      priceCurrency,
       priceUsd,
       priceTnd,
       fxRate,
       startDate,
       endDate,
-      // on laisse `code` facultatif si fourni
       code: typeof b.code === "string" ? b.code : void 0
     };
   };
@@ -1533,11 +1698,14 @@ async function registerRoutes(app) {
         if (!b.clientId) return res.status(400).json({ message: "clientId is required" });
         if (!b.productId) return res.status(400).json({ message: "productId is required" });
         const payload = toStorageContractPayload(b);
-        if (!payload.quantityT || payload.quantityT <= 0) {
-          return res.status(400).json({ message: "quantityT must be > 0" });
+        if (!payload.quantityTons || payload.quantityTons <= 0) {
+          return res.status(400).json({ message: "quantityTons must be > 0" });
         }
-        if (payload.priceUsd == null && payload.priceTnd == null) {
-          return res.status(400).json({ message: "priceUsd or priceTnd is required" });
+        if (payload.priceCurrency === "USD" && payload.priceUsd == null) {
+          return res.status(400).json({ message: "priceUsd is required when priceCurrency=USD" });
+        }
+        if (payload.priceCurrency === "TND" && payload.priceTnd == null) {
+          return res.status(400).json({ message: "priceTnd is required when priceCurrency=TND" });
         }
         const saved = await storage.createContract(payload);
         res.json({ data: saved });

@@ -6,8 +6,7 @@ import {
   insertChatMessageSchema,
   insertChatChannelSchema,
   insertProductSchema,
-  // On NE dépend plus d'insertClientSchema / insertContractSchema pour la validation
-  // afin d'éviter les .extend() sur un ZodEffects.
+  // on évite d'importer des ZodEffects (.transform) pour .omit/.partial ici
   // insertClientSchema,
   // insertContractSchema,
 } from "@shared/schema";
@@ -285,13 +284,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/vessels", async (req, res) => {
+  try {
     const b = req.body || {};
-    if (!b.name || !b.type || !b.dwt || !b.status) {
-      return res.status(400).json({ message: "Missing required fields" });
-    }
-    const saved = await storage.createVessel(b);
+    const name = String(b.name ?? "").trim();
+    if (!name) return res.status(400).json({ message: "name is required" });
+
+    // Valeurs par défaut si non fournis depuis l’UI
+    const payload = {
+      name,
+      type: b.type ?? "Tanker",
+      dwt: b.dwt ?? 0,                // laissé à 0 si vide
+      status: b.status ?? "Planned",
+      eta: b.eta ?? undefined,
+      origin: b.origin ?? undefined,
+      destination: b.destination ?? undefined,
+      // si tu ajoutes de nouveaux champs plus tard, ils ne bloqueront pas
+    };
+
+    const saved = await storage.createVessel(payload);
     res.json({ data: saved });
-  });
+  } catch (e: any) {
+    res.status(400).json({ message: e?.message || "Failed to create vessel" });
+  }
+});
+
 
   app.put("/api/vessels/:id", async (req, res) => {
     try {
@@ -447,10 +463,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   /* ----------------- Contrats API ----------------- */
-  // Helper de normalisation: accepte vieux/nouveaux noms et mappe vers le storage
+  // ---- Normalisation Contrats (UI -> storage) ----
   const toStorageContractPayload = (b: any) => {
-    const market = b.market === "EXPORT" ? "EXPORT" : "LOCAL";
+    // Marché
+    const market: "LOCAL" | "EXPORT" =
+      b.market === "EXPORT" ? "EXPORT" : "LOCAL";
 
+    // Dates
     const contractDate: string =
       (typeof b.contractDate === "string" && b.contractDate) ||
       (typeof b.date === "string" && b.date) ||
@@ -466,41 +485,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
       (typeof b.dateEnd === "string" && b.dateEnd) ||
       contractDate;
 
-    const quantityT =
+    // Quantité (UI envoie quantityT)
+    const quantityTons: number =
       (b.quantityT != null ? Number(b.quantityT) : undefined) ??
       (b.quantityTons != null ? Number(b.quantityTons) : undefined) ??
       0;
 
-    const priceCurrency: "USD" | "TND" =
+    // Devise & prix
+    const inferredCurrency: "USD" | "TND" =
       b.priceCurrency === "TND" ? "TND" : "USD";
+    const priceCurrency: "USD" | "TND" =
+      b.priceCurrency ?? (b.priceUsd != null ? "USD" : (b.priceTnd != null ? "TND" : inferredCurrency));
+
+    // L’UI peut envoyer pricePerT (USD/T ou TND/T selon priceCurrency)
+    const pricePerT = b.pricePerT != null ? Number(b.pricePerT) : undefined;
 
     const priceUsd =
       priceCurrency === "USD"
-        ? (b.priceUsd != null ? Number(b.priceUsd) : (b.pricePerT != null ? Number(b.pricePerT) : undefined))
+        ? (b.priceUsd != null ? Number(b.priceUsd) : pricePerT)
         : undefined;
 
     const priceTnd =
       priceCurrency === "TND"
-        ? (b.priceTnd != null ? Number(b.priceTnd) : (b.pricePerT != null ? Number(b.pricePerT) : undefined))
+        ? (b.priceTnd != null ? Number(b.priceTnd) : pricePerT)
         : undefined;
 
     const fxRate = b.fxRate != null ? Number(b.fxRate) : undefined;
 
     return {
-      // compat avec storage.createContract (attend `date`, pas `contractDate`)
-      date: contractDate,
+      // >>>>> IMPORTANT: le storage attend `contractDate` et `quantityTons`
+      contractDate,
       market,
       clientId: String(b.clientId || ""),
       clientName: b.clientName ? String(b.clientName) : undefined,
       productId: String(b.productId || ""),
       productName: b.productName ? String(b.productName) : undefined,
-      quantityT,
+      quantityTons,
+      priceCurrency,
       priceUsd,
       priceTnd,
       fxRate,
       startDate,
       endDate,
-      // on laisse `code` facultatif si fourni
       code: typeof b.code === "string" ? b.code : undefined,
     };
   };
@@ -515,16 +541,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     app.post(`${base}`, async (req, res) => {
       try {
         const b = req.body || {};
-        // validations minimales
         if (!b.clientId) return res.status(400).json({ message: "clientId is required" });
         if (!b.productId) return res.status(400).json({ message: "productId is required" });
 
         const payload = toStorageContractPayload(b);
-        if (!payload.quantityT || payload.quantityT <= 0) {
-          return res.status(400).json({ message: "quantityT must be > 0" });
+
+        if (!payload.quantityTons || payload.quantityTons <= 0) {
+          return res.status(400).json({ message: "quantityTons must be > 0" });
         }
-        if (payload.priceUsd == null && payload.priceTnd == null) {
-          return res.status(400).json({ message: "priceUsd or priceTnd is required" });
+        // validation prix selon devise
+        if (payload.priceCurrency === "USD" && (payload.priceUsd == null)) {
+          return res.status(400).json({ message: "priceUsd is required when priceCurrency=USD" });
+        }
+        if (payload.priceCurrency === "TND" && (payload.priceTnd == null)) {
+          return res.status(400).json({ message: "priceTnd is required when priceCurrency=TND" });
         }
 
         const saved = await storage.createContract(payload as any);
@@ -540,9 +570,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const b = req.body || {};
         const patch = toStorageContractPayload(b);
 
-        // PATCH: on enlève les champs non fournis pour ne pas écraser
+        // PATCH: ne pas écraser avec undefined
         Object.keys(patch).forEach(k => {
-          if (patch[k as keyof typeof patch] === undefined) delete (patch as any)[k];
+          if ((patch as any)[k] === undefined) delete (patch as any)[k];
         });
 
         const saved = await storage.updateContract(id, patch as any);
